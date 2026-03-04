@@ -769,7 +769,7 @@ function run_simulation(;
         ν_m_grid = ν_m0 ./ max.(T_e, T_FLOOR).^(3/2)
         ν_max = maximum(ν_m_grid)
         τ_coll = 0.5 / max(ν_max, 1e-8)
-        τ = min(h / v_a, 0.15 * h / max_vz, τ_coll, total_time - t)
+        τ = min(h / v_a, 0.4 * h / max_vz, τ_coll, total_time - t)
 
         # Вычисление тока из H
         compute_current!(j, H_x_half, h)
