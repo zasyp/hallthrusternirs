@@ -1,6 +1,9 @@
 using LinearAlgebra
 using Plots
 
+const N_FLOOR = 1e-8
+const T_FLOOR = 1e-6
+
 # Структура макрочастицы с полем active
 mutable struct Particle
     z::Float64
@@ -106,50 +109,6 @@ function update_neutrals(
 end
 
 # ------------------------------------------------------------
-# Промежуточная температура (без переноса) – формула (32)
-# ------------------------------------------------------------
-function compute_Ez!(
-    Ez::Vector{Float64}, H_x::Vector{Float64}, H0::Float64,
-    n::Vector{Float64}, T::Vector{Float64}, j::Vector{Float64},
-    vy::Vector{Float64}, n_a::Vector{Float64}, α0::Float64,
-    ζ::Float64, kI::Float64, ε_dim::Float64,
-    va::Float64, h::Float64
-)
-    M = length(H_x)
-    @assert length(Ez) == M+1 && length(n) == M+1 && length(T) == M+1
-    @assert length(j) == M+1 && length(vy) == M+1 && length(n_a) == M+1
-
-    H_int = zeros(M+1)
-    H_int[1] = H_x[1]
-    for k in 2:M
-        H_int[k] = (H_x[k-1] + H_x[k]) / 2
-    end
-    H_int[M+1] = H_x[M]
-    H_star = H_int .+ H0
-
-    d_nT = zeros(M+1)
-    for k in 2:M
-        d_nT[k] = (n[k+1]*T[k+1] - n[k-1]*T[k-1]) / (2h)
-    end
-    d_nT[1] = d_nT[2]
-    d_nT[M+1] = d_nT[M]
-
-    for k in 1:M+1
-        n_safe = max(n[k], 1)   # увеличено до 1e-4
-        # Вычисляем Ez с ограничением
-        term1 = H_star[k] * vy[k]
-        term2 = (α0 / n_safe) * H_star[k] * j[k]
-        term3 = (ζ * α0 / n_safe) * d_nT[k]
-        term4 = (kI / ε_dim) * n_a[k] * va
-        Ez[k] = term1 - term2 - term3 - term4
-        if abs(Ez[k]) > 1e3
-            Ez[k] = sign(Ez[k]) * 1e3
-        end
-    end
-    return Ez
-end
-
-# ------------------------------------------------------------
 # Ток j по магнитному полю H (закон Ампера)
 # ------------------------------------------------------------
 function compute_current!(j::Vector{Float64}, H_x::Vector{Float64}, h::Float64)
@@ -189,8 +148,8 @@ function solve_electric_field!(
     d = zeros(M+1)
 
     for k in 2:M
-        n_safe = max(n[k], 1e-12)
-        T_safe = max(T[k], 1e-12)
+        n_safe = max(n[k], 0.01)
+        T_safe = max(T[k], T_FLOOR)
         if n_safe > 0 && T_safe > 0
             coeff = α / (n_safe * h^2)
             a[k] = -coeff
@@ -280,39 +239,52 @@ function compute_Ez!(
     n::Vector{Float64}, T::Vector{Float64}, j::Vector{Float64},
     vy::Vector{Float64}, n_a::Vector{Float64}, α0::Float64,
     ζ::Float64, kI::Float64, ε_dim::Float64,
-    va::Float64, h::Float64
+    va::Float64, h::Float64;
+    N_REG::Float64 = 0.02,
+    νE::Float64 = 0.01   # коэффициент слабой диффузии поля
 )
     M = length(H_x)
-    @assert length(Ez) == M+1 && length(n) == M+1 && length(T) == M+1
-    @assert length(j) == M+1 && length(vy) == M+1 && length(n_a) == M+1
+    @assert length(Ez) == M+1
 
-    H_int = zeros(M+1)
-    H_int[1] = H_x[1]
+    # --- 1. Сглаживаем n и T ---
+    n_s = copy(n)
+    T_s = copy(T)
+    smooth_field!(n_s, 2)
+    smooth_field!(T_s, 2)
+
+    # --- 2. Интерполяция H ---
+    H_star = similar(Ez)
+    H_star[1] = H_x[1] + H0
     for k in 2:M
-        H_int[k] = (H_x[k-1] + H_x[k]) / 2
+        H_star[k] = 0.5*(H_x[k-1] + H_x[k]) + H0
     end
-    H_int[M+1] = H_x[M]
-    H_star = H_int .+ H0
+    H_star[M+1] = H_x[M] + H0
 
-    d_nT = zeros(M+1)
+    # --- 3. Градиент давления от СГЛАЖЕННЫХ величин ---
+    d_nT = similar(Ez)
     for k in 2:M
-        d_nT[k] = (n[k+1]*T[k+1] - n[k-1]*T[k-1]) / (2h)
+        d_nT[k] = (n_s[k+1]*T_s[k+1] - n_s[k-1]*T_s[k-1]) / (2h)
     end
-    d_nT[1] = d_nT[2]
-    d_nT[M+1] = d_nT[M]
+    d_nT[1]     = d_nT[2]
+    d_nT[M+1]   = d_nT[M]
 
+    # --- 4. Основное уравнение ---
     for k in 1:M+1
-        n_safe = max(n[k], 1)   # увеличено до 1e-4
-        # Вычисляем Ez с ограничением
+        n_safe = max(n_s[k], N_REG)
+
         term1 = H_star[k] * vy[k]
         term2 = (α0 / n_safe) * H_star[k] * j[k]
         term3 = (ζ * α0 / n_safe) * d_nT[k]
         term4 = (kI / ε_dim) * n_a[k] * va
+
         Ez[k] = term1 - term2 - term3 - term4
-        if abs(Ez[k]) > 1e3
-            Ez[k] = sign(Ez[k]) * 1e3
-        end
     end
+
+    # --- 5. Слабая физическая диффузия Ez (гасит только шум) ---
+    for k in 2:M
+        Ez[k] += νE * (Ez[k+1] - 2Ez[k] + Ez[k-1])
+    end
+
     return Ez
 end
 
@@ -432,8 +404,11 @@ function move_particles!(particles,
             vy_pred = vy + 0.5τ0 * (ε * (E_y_mid + H_star_mid*vz - ν_m_mid*j_mid))
             vz_pred = vz + 0.5τ0 * (ε * (E_z_mid - H_star_mid*vy))
 
-            vy_new = vy + τ0 * (ε * (E_y_mid + H_star_mid*vz_pred - ν_m_mid*j_mid))
-            vz_new = vz + τ0 * (ε * (E_z_mid - H_star_mid*vy_pred))
+            νp = ν_m_mid
+            vy_new = vy + τ0 * (ε * (E_y_mid + H_star_mid*vz_pred - ν_m_mid*j_mid)
+                                - νp * vy)
+            vz_new = vz + τ0 * (ε * (E_z_mid - H_star_mid*vy_pred)
+                                - νp * vz)
 
             # Защита от нечисловых значений
             if isnan(vy_new) || isnan(vz_new) || abs(vy_new) > 1e6 || abs(vz_new) > 1e6
@@ -470,18 +445,35 @@ end
 # ------------------------------------------------------------
 function add_new_particles!(particles, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h)
     for k in eachindex(x_grid)
-        z = x_grid[k]
         q_new = kI * n_a_new[k] * n_ion[k] * τ * h
-        if q_new > 0
-            push!(particles, Particle(z, 0.0, v_a, T_ion, q_new, true))
+        # если заряд слишком мал — не создаём новую частицу
+        if q_new < 1e-6
+            continue
         end
+        # создаём одну частицу с накопленным весом
+        push!(particles,
+              Particle(x_grid[k], 0.0, v_a, T_ion, q_new, true))
     end
 end
 
 # ------------------------------------------------------------
 # Удаление неактивных частиц
 # ------------------------------------------------------------
-function remove_inactive_particles!(particles)
+function remove_inactive_particles!(particles, L, τ, kR)
+    for p in particles
+        # 1. Удаление за границей
+        if p.z < 0 || p.z > L
+            p.active = false
+            continue
+        end
+        # 2. Простая рекомбинация
+        # вероятность исчезновения пропорциональна плотности
+        P_rec = kR * p.q * τ
+        if rand() < P_rec
+            p.active = false
+        end
+    end
+
     filter!(p -> p.active, particles)
 end
 
@@ -514,6 +506,46 @@ function plot_results(snapshots, thrust_time, thrust_values, save_times)
         savefig("thrust.png")
         display(p_thrust)
     end
+end
+
+# ------------------------------------------------------------
+# Промежуточная температура (устойчивый вариант)
+# ------------------------------------------------------------
+function intermediate_temperature(
+    T_new::Vector{Float64},
+    T_old::Vector{Float64},
+    n::Vector{Float64},
+    vz::Vector{Float64},
+    j::Vector{Float64},
+    n_a::Vector{Float64},
+    τ::Float64,
+    γ::Float64,
+    mi_over_mΣ::Float64,
+    ν_m0::Float64,
+    kI::Float64,
+    h::Float64
+)
+    M = length(T_old) - 1
+
+    for k in 2:M
+        n_safe = max(n[k], 0.01)
+        T_safe = max(T_old[k], T_FLOOR)
+        # Столкновительный нагрев
+        ν_m = ν_m0 / T_safe^(3/2)
+        Q_coll = ν_m * j[k]^2 / n_safe
+        # Потери на ионизацию
+        Q_ion = kI * n_a[k] * n_safe
+        # Явный шаг
+        T_tmp = T_old[k] + τ * (Q_coll - Q_ion)
+        # Гарантия положительности
+        T_new[k] = max(T_tmp, T_FLOOR)
+    end
+
+    # Граничные узлы
+    T_new[1] = T_new[2]
+    T_new[M+1] = T_new[M]
+
+    return T_new
 end
 
 # ------------------------------------------------------------
@@ -580,12 +612,23 @@ function run_simulation(;
 
     while t < total_time
         compute_grid_quantities!(particles, x_grid, n_ion, v_iy, v_iz, T_e, h)
-        smooth_field!(n_ion, 10)
-        smooth_field!(v_iy, 10)
-        smooth_field!(v_iz, 10)
-        smooth_field!(T_e, 10)
+        smooth_field!(n_ion, 2)
+        smooth_field!(v_iy, 2)
+        smooth_field!(v_iz, 2)
+        smooth_field!(T_e, 2)
         max_vz = max(maximum(abs.(v_iz)), 1e-12)
-        τ = min(h / v_a, 0.3 * h / max_vz, total_time - t)
+        ν_m_grid = ν_m0 ./ max.(T_e, T_FLOOR).^(3/2)
+        ν_max = maximum(ν_m_grid)
+        τ_coll = 0.5 / max(ν_max, 1e-8)
+
+        τ = min(h / v_a,
+                0.3 * h / max_vz,
+                τ_coll,
+                total_time - t)
+                τ = min(h / v_a,
+                0.3 * h / max_vz,
+                τ_coll,
+                total_time - t)
 
         compute_current!(j, H_x_half, h)
 
@@ -609,9 +652,9 @@ function run_simulation(;
                                                   n_ion, v_iz, T_e, j,
                                                   τ, α, ν_m0, h, :j0)
 
-        smooth_field!(E_y, 20)
-        smooth_field!(H_x_half, 20)
-        smooth_field!(j, 20)
+        smooth_field!(E_y, 10)
+        smooth_field!(H_x_half, 10)
+        smooth_field!(j, 10)
 
         compute_Ez!(E_z, H_x_half, H0_val,
                     n_ion, T_e, j, v_iy, n_a_new,
@@ -679,7 +722,7 @@ let
         ζ = 0.061,
         ε_dim = 1.0,
         total_time = 0.2,
-        save_times = [0.02, 0.05, 0.08, 0.12, 0.2],
+        save_times = [0.2],
         do_plot = true
     )
 end
