@@ -862,7 +862,7 @@ function run_simulation(;
                 "min_n=$(minimum(n_ion)), max_Ez=$(maximum(abs.(E_z))), ",
                 "nan=$(counters.nan), overspeed=$(counters.overspeed), ",
                 "exited=$(counters.exited_right), reflected=$(counters.reflected_left)")
-    end
+    end 
 
     do_plot && plot_results(snapshots, thrust_time, thrust_values, save_times)
     
@@ -875,15 +875,15 @@ end
 let
     H0_func(z) = 1.0
     run_simulation(
-    L=1.0, M=100, N1=100, T_ion=1.0, v_a=0.1, n_a_left=10.0, kI=1.0,
-    ε=1.0, ν_m0=15.0, γ=5/3, mi_over_mΣ=1.0, H0_func=z->1.0,
+    L=1.0, M=100, N1=200, T_ion=1.0, v_a=0.1, n_a_left=10.0, kI=1.1,
+    ε=1.0, ν_m0=15.0, γ=5/3, mi_over_mΣ=1.0, H0_func=z->1.9,
     α=0.283,          # ξ² ≈ 0.532²
     α0=160.0,         # κξ √(mᵢ/mₑ) ≈ 1·0.532·300
     ζ=0.061,          # из PDF
     ε_dim=1.0,
-    total_time=20.0,  # дать время на развитие
+    total_time=20.0,
     save_times=[5.0,10.0,15.0,20.0],
     do_plot=true,
-    kR=0.0
+    kR=0.1
 )
 end
