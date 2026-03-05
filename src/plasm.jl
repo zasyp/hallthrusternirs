@@ -1,8 +1,18 @@
+module PlasmaDynamics
+
 using LinearAlgebra
-using .PartCount
-using .NumericalFunctionsSPT
+using ..PartCount
+using ..NumericalFunctionsSPT
+
+export neutrals_evolution,
+       intermidiate_temperature,
+       compute_current,
+       electric_field_solver,
+       compute_Ez
+
 const N_FLOOR = 1e-8
 const T_FLOOR = 1e-6
+const SMOOTHING_PASSES = 3
 
 """
 Уравнения для концентраций и первый шаг расчета энергии
@@ -25,9 +35,9 @@ function neutrals_evolution(
     end
     n_a_new[1] = n_source
     for i in 2:M+1
-        convection = -v_a * τ * (n_a_old[k] - n_a_old[k-1]) / h
-        n_a_new[k] = (n_a_old[k] + convection) / (1.0 + τ * kI * n_ion[k])
-        n_a_new[k] = max(n_a_new[k], 0.0)
+        convection = -v_a * τ * (n_a_old[i] - n_a_old[i-1]) / h
+        n_a_new[i] = (n_a_old[i] + convection) / (1.0 + τ * kI * n_ion[i])
+        n_a_new[i] = max(n_a_new[i], 0.0)
     end
 end
 
@@ -49,10 +59,10 @@ function intermidiate_temperature(
 )
     M = length(T_old) - 1
     for i in 2:M
-        ν_m = ν_m0 / T ^ (3/2)
+        ν_m = ν_m0 / T_old[i] ^ (3/2)
         dvz = (vz[i+1] - vz[i-1]) / (2h)
         Q_collision = (γ - 1) * (mi / (mi + me)) * ν_m * j[i] ^ 2 / n[i]
-        Q_ionisation = (γ - 1) * kI * n_a[i] * n
+        Q_ionisation = (γ - 1) * kI * n_a[i] * n[i]
         T_new[i] = T_old[i] + τ * (Q_collision + Q_ionisation - (γ - 1) * T_old[i] * dvz)
     end
     T_new[1] = T_new[2]
@@ -69,12 +79,12 @@ function compute_current(
     H_x::Vector{Float64},
     h::Float64
 )
-    j[1] = j[M+1] = 0.0
     M = length(H_x)
     @assert length(j) == M+1
     for i in 2:M
-        j = (H_x[i] - H_x[i-1]) / h
+        j[i] = (H_x[i] - H_x[i-1]) / h   # исправлено: j[i] = ...
     end
+    j[1] = j[M+1] = 0.0
     return j
 end
 
@@ -104,7 +114,7 @@ function electric_field_solver(
     H_interpolated = zeros(M+1)    # Число целых узлов на один больше, чем полуцелых
     H_interpolated[1] = H_x_old[1]
     for i in 2:M
-        H_int[i] = (H_x_old[i-1] + H_x_old[i]) / 2  # Интерполируем значения в целых узлах как среднее из соседних полуцелых
+        H_interpolated[i] = (H_x_old[i-1] + H_x_old[i]) / 2  # Интерполируем значения в целых узлах как среднее из соседних полуцелых
     end
     H_interpolated[M+1] = H_x_old[M]    # Берем просто значение из последнего полуцелого узла
     H_star = H_interpolated .+ H0_func(x_grid)   # Добавляем внешнее поле
@@ -113,7 +123,7 @@ function electric_field_solver(
     c = zeros(M+1)
     d = zeros(M+1)
     for i in 2:M
-        A = α / (n * h ^ 2)
+        A = α / (n[i] * h ^ 2)          # исправлено: n[i]
         B = (ν_m0 / T[i] ^ (3/2)) * (τ / h ^ 2)
         dvz = (vz[i+1] - vz[i-1]) / (2h)
         C = vz[i] * τ / (4h)
@@ -124,7 +134,7 @@ function electric_field_solver(
         c[i] = - A - (B + D) + C
         dj = (j_old[i+1] - j_old[i-1]) / (2h)    # Производную плотности тока по координате 
         d[i] = (ν_m0 / T[i] ^ (3/2)) * j_old[i] - H_star[i] * vz[i] +
-               (α / n) * j_old[i] * dvz + (α / n[i]) * vz[i] * dj
+               (α / n[i]) * j_old[i] * dvz + (α / n[i]) * vz[i] * dj
     end
     # Костыль, но просто символьно определяю тип ГУ 
     # (в данном случае говорю что азимутальные токи на границах равны нулю)
@@ -218,5 +228,28 @@ function compute_Ez(
     end
     d_nT[1] = d_nT[2]
     d_nT[M+1] = d_nT[M]
-    
+
+    # Исправлены неопределённые переменные: n_safe и ζ.
+    # Предположим, что ζ = 1 (можно уточнить) и используем защиту от деления на ноль
+    ζ = 1.0   # или передавать как аргумент
+    n_safe = max.(n, N_REG)   # защита от нуля
+
+    for i in 1:M+1
+        term1 = H_star[i] * vy[i]
+        term2 = (α0 / n_safe[i]) * H_star[i] * j_mid[i]
+        term3 = (ζ * α0 / n_safe[i]) * d_nT[i]
+        term4 = (kI / ε_dim) * n_a[i] * va
+        Ez[i] = term1 - term2 - term3 - term4
+    end
+    # Дополнительное искуственное диффузное сглаживание
+    for _ in 1:SMOOTHING_PASSES
+        Ez_smooth = copy(Ez)
+        for i in 2:M
+            Ez_smooth[i] = Ez[i] + νE * (Ez[i+1] - 2Ez[i] + Ez[i-1])
+        end
+        Ez .= Ez_smooth
+    end
+    return Ez
 end
+
+end # module PlasmaDynamics
