@@ -192,7 +192,7 @@ export neutrals_evolution,
         vy::Vector{Float64},
         n_a::Vector{Float64},
         α0::Float64,
-        ξ::Float64,
+        ζ::Float64,
         kI::Float64,
         ε_dim::Float64,
         va::Float64,
@@ -200,10 +200,11 @@ export neutrals_evolution,
         x_grid::AbstractVector{Float64},
         H0_func,
         N_REG::Float64 = N_FLOOR,
-        νE::Float64 = 0.08 # Искуственная вязкость для размазывания поля
+        νE::Float64 = 0.15 # Искуственная вязкость для размазывания поля
     )
         M = length(H_x_old)
         @assert length(Ez) == M + 1
+        L = x_grid[end]
         # Аппроксимация полусуммами
         H_x_mid = (H_x_new + H_x_old) / 2
         j_mid = (j_new + j_old) / 2
@@ -218,8 +219,8 @@ export neutrals_evolution,
         # Сглаживание для производной
         n_s = copy(n)
         T_s = copy(T)
-        Steklov_smooth(n_s, 2)
-        Steklov_smooth(T_s, 2)
+        Steklov_smooth(n_s, 2, h, L)
+        Steklov_smooth(T_s, 2, h, L)
         
         # Вычисление производной δnT/δz
         d_nT = zeros(M+1)
