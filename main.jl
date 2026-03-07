@@ -220,7 +220,7 @@ end
 # -------------------------------------------------------------------
 let
     params = PartCount.SimParams(
-        L=2.5, M=100,
+        L=2, M=100,
         mi=1.0, me=1/1836,                     # отношение масс для ксенона
         T_ion=1.0, v_a=1, n_a_left=10.0, kI=1.1, kR=0.1,
         γ=5/3, ε=1.0, ν_m0=15.0,
@@ -228,5 +228,5 @@ let
         H0_func=z->1.9,                         # внешнее магнитное поле (константа)
         N1=100                                   # число макрочастиц на ячейку
     )
-    run_simulation(params, total_time=20.0, save_times=[5.0,10.0, 15.0, 20.0], do_plot=true)
+    run_simulation(params, total_time=50.0, save_times=[5.0,10.0, 15.0, 20.0, 30.0, 40.0, 50.0], do_plot=true)
 end 
