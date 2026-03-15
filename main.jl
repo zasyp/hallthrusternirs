@@ -228,5 +228,5 @@ let
         H0_func=z->1.9,                         # внешнее магнитное поле (константа)
         N1=100                                   # число макрочастиц на ячейку
     )
-    run_simulation(params, total_time=6.0, save_times=[1.0,2.0, 3.0, 4.0, 5.0, 6.0], do_plot=true)
+    run_simulation(params, total_time=30.0, save_times=[1.0,2.0, 3.0, 4.0, 5.0, 6.0, 10.0, 20.0, 30.0], do_plot=true)
 end 
