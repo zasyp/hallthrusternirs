@@ -239,7 +239,7 @@ export neutrals_evolution,
             term1 = H_star[i] * vy[i]
             term2 = (α0 / n_safe[i]) * H_star[i] * j_mid[i]
             term3 = (ζ * α0 / n_safe[i]) * d_nT[i]
-            term4 = (kI / ε_dim) * n_a[i] * va
+            term4 = 6.55e-6 * (kI / ε_dim) * n_a[i] * va
             Ez[i] = term1 - term2 - term3 - term4
         end
         # Дополнительное искуственное диффузное сглаживание

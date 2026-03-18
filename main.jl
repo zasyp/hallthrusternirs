@@ -221,13 +221,12 @@ end
 let
     params = PartCount.SimParams(
         L=4.0, M=100,
-        mi=1.0, me=6.55e-6,                     # отношение масс для Kr
-        T_ion=1.157, v_a=1.0, n_a_left=1, kI=96.53, kR=0.1,
-        γ=5/3, ε=2.916, ν_m0=0.9119528019094856,
-        α=4.88e-4, α0=217.5, ζ=0.2824075765394308, ε_dim=1,
-        H0_func=z->1,                         # внешнее поле (константа)
-        N1=100,
+        mi=1.0, me=6.55e-6,
+        T_ion=1.157, v_a=0.040780141843971635 , n_a_left=10, kI=0.16, kR=0.1,
+        γ=5/3, ε=0.064, ν_m0=0.912,
+        α=0.054, α0=524.8, ζ=0.007, ε_dim=1,
+        H0_func=z->1,
+        N1=100
     )
-    run_simulation(params, total_time=12.0, save_times=[8.0, 9.0, 10.0, 11.0, 12.0], do_plot=true)
-end 
-
+    run_simulation(params, total_time=40.0, save_times=[10.0, 20.0, 30.0, 40.0], do_plot=true)
+end
