@@ -1,29 +1,16 @@
 # compute_dimensionless.jl
 using Printf
 
-# Физические константы (можно взять из from_cw.jl или задать явно)
-const e = 1.6e-19          # заряд электрона, Кл
-const k_B = 1.38e-23       # постоянная Больцмана, Дж/К
-const ε0 = 8.854e-12       # диэлектрическая постоянная, Ф/м
-const c = 3e8              # скорость света, м/с
-const μ0 = 4π * 1e-7       # магнитная постоянная, Гн/м
+const e = 1.6e-19
+const k_B = 1.38e-23
+const ε0 = 8.854e-12
+const c = 3e8
+const μ0 = 4π * 1e-7
 
 """
     dimensionless_params(; L_phys, v_char, n_char, H_char, T_char, mi, me, β0, σ0_Spitzer=0.905e7)
 
 Вычисляет безразмерные параметры для гибридной модели СПД.
-Аргументы:
-- L_phys  : характерная длина канала, м (обычно 0.04)
-- v_char  : характерная скорость, м/с (скорость ионов на выходе)
-- n_char  : характерная концентрация ионов, м⁻³
-- H_char  : характерное магнитное поле, Тл
-- T_char  : характерная температура (ионизации), К (например, 14 эВ * 11604.5)
-- mi, me  : массы иона и электрона, кг
-- β0      : коэффициент ионизации, м³/с (обычно 1e-14 для криптона?)
-- σ0_Spitzer : коэффициент проводимости Спитцера в СГС (по умолчанию 0.905e7)
-               Для перевода в СИ используем соотношение σ_СИ = σ_СГС * (c^2 * 1e-5)? 
-               Но проще оставить ν_m0 как параметр, вычисляемый отдельно.
-Возвращает именованный кортеж со всеми числами подобия.
 """
 function dimensionless_params(;
     L_phys::Float64,
@@ -34,74 +21,102 @@ function dimensionless_params(;
     mi::Float64,
     me::Float64,
     β0::Float64,
-    σ0_Spitzer::Float64 = 0.905e7   # в СГС (см⁻³·с⁻¹·эрг⁻³/²)
+    σ0_Spitzer::Float64 = 0.905e7
 )
 
-    # Характерное время
     t_char = L_phys / v_char
-
-    # Циклотронная частота ионов (в СИ)
     ωci = e * H_char / mi
     ε = t_char * ωci
 
-    # Альфвеновская скорость (в СИ с μ0)
     ρ = mi * n_char
     vA = H_char / sqrt(μ0 * ρ)
     κ = vA / v_char
 
-    # Параметр ζ (связан с плазменной бетой)
     ζ = k_B * T_char / (mi * vA^2)
 
-    # Электронная плазменная частота
     ωpe = sqrt(e^2 * n_char / (ε0 * me))
-
-    # Параметр инерции электронов ξ (приближённо c/(L ωpe))
     ξ = c / (L_phys * ωpe)
     α = ξ^2
 
-    # λ-параметры (отношение массы к заряду)
     λi = mi / e
     λe = me / e
     λz = λi + λe
 
-    # Коэффициент α0 (влияние холловских членов)
     α0 = κ * ξ * (λi / λz) * sqrt(λi / λe)
-
-    # Коэффициент ионизации
     kI = β0 * n_char * t_char
-
-    # --- Вычисление ν_m0 (магнитная вязкость) ---
-    # В статье ν_m0 = c^2 / (4π σ0 [T]^{3/2} [L][v]) в СГС.
-    # Переведём σ0 в СИ: σ_СИ = σ_СГС * (c^2 * 1e-5)? 
-    # Упростим: возьмём σ0_СИ из эксперимента или оценим.
-    # В Спитцеровской проводимости σ = σ0 T^{3/2}, где σ0 в СИ имеет размерность См·м⁻¹·К⁻³/².
-    # Значение σ0_СИ можно получить, разделив σ0_СГС на 9e9 (примерно).
-    # Для оценок используем формулу из статьи прямо в СГС, а затем переведём ν_m0 в безразмерный вид,
-    # но проще пока оставить ν_m0 как подбираемый параметр.
-    # Оставим вычисление ν_m0 за рамками функции, так как оно требует дополнительных допущений.
-    # Пользователь может задать ν_m0 отдельно, например, из статьи (0.912).
-
 
     force = mi * n_char * L_phys ^ 2 * v_char ^ 2 / t_char
 
     return (ε=ε, κ=κ, ζ=ζ, ξ=ξ, α=α, α0=α0, kI=kI, t_char=t_char, vA=vA, force=force)
 end
 
-# -------------------------------------------------------------------
-# Пример расчёта для третьего режима СПД-70 (данные из from_cw.jl)
-# -------------------------------------------------------------------
-let
-    # Данные для третьего режима (z = 30 мм)
-    L_phys = 0.04               # длина канала, м (4 см)
-    v_char = 8461.7              # скорость ионов на выходе, м/с
-    n_char = 3.2837e17           # концентрация ионов, м⁻³
-    H_char = 0.01172             # магнитное поле, Тл (117.2 Гс)
-    T_char = 14.0 * 11604.5      # температура ионизации, К (14 эВ)
-    mi = 1.391e-25               # масса иона Kr, кг
-    me = 9.11e-31                # масса электрона, кг
-    β0 = 1e-14                   # коэффициент ионизации, м³/с (10⁻⁸ см³/с = 10⁻¹⁴ м³/с)
+"""
+    compute_nu_m0(H_char, mi, L_phys, v_char, σ0_Spitzer; calibration=1.0)
 
-    params = dimensionless_params(;
+Вычисляет коэффициент ν_m0 (магнитная вязкость) из проводимости Спитцера.
+
+ПРЕДУПРЕЖДЕНИЕ: текущая формула содержит неопределённость в масштабировании.
+Использует калибровочный коэффициент от экспериментальных данных.
+
+Формула: ν_m0 = calibration * c² / (4π σ0 L_phys v_char)
+где σ0_Spitzer - проводимость Спитцера в СГС при T_e = 1 К
+
+Типично: calibration ≈ 0.912 / (полученное значение)
+для согласования с экспериментом СПД-70
+"""
+function compute_nu_m0(H_char, mi, L_phys, v_char, σ0_Spitzer = 0.905e7; calibration=1.0)
+    # Формула магнитной вязкости в безразмерном виде
+    # ν_m0 = c² / (4π σ0 L_phys v_char)
+    # σ0_Spitzer в СГС (см⁻¹·с⁻¹·К^(3/2)·эрг^(-3/2))
+
+    ν_m0 = calibration * (c ^ 2) / (4π * σ0_Spitzer * L_phys * v_char)
+
+    return ν_m0
+end
+
+"""
+    params_from_physics(; L_phys, v_char, n_char, H_char, T_char, mi, me, β0, σ0_Spitzer,
+                          v_a_ion, n_a_left, kR, M=100, N1=100, ε_dim=1.0, H0_func=z->1.0,
+                          ν_m0_override=nothing, kI_override=nothing)
+
+Вычисляет полный набор безразмерных параметров для SimParams из физических параметров СПД-70.
+
+Аргументы:
+- L_phys, v_char, n_char, H_char, T_char: физические масштабы
+- mi, me: массы иона и электрона, кг
+- β0: коэффициент ионизации, м³/с
+- σ0_Spitzer: проводимость Спитцера, СГС (по умолчанию 0.905e7)
+- v_a_ion: скорость ионизации, м/с (начальная скорость новых ионов)
+- n_a_left: граничная концентрация нейтралов слева
+- kR: коэффициент рекомбинации
+- M, N1, ε_dim, H0_func: параметры сетки и конфигурации
+- ν_m0_override: если задано, использовать это значение вместо расчетного
+- kI_override: если задано, использовать это значение вместо расчетного
+
+Возвращает: ready-to-use SimParams для run_simulation()
+"""
+function params_from_physics(;
+    L_phys::Float64,
+    v_char::Float64,
+    n_char::Float64,
+    H_char::Float64,
+    T_char::Float64,
+    mi::Float64,
+    me::Float64,
+    β0::Float64,
+    σ0_Spitzer::Float64 = 0.905e7,
+    v_a_ion::Float64 = 0.0408 * 8461.7,   # По умолчанию значение из текущей симуляции
+    n_a_left::Float64 = 10.0,
+    kR::Float64 = 0.0,
+    M::Int = 100,
+    N1::Int = 100,
+    ε_dim::Float64 = 1.0,
+    H0_func::Function = z -> 1.0,
+    ν_m0_override::Union{Float64, Nothing} = nothing,
+    kI_override::Union{Float64, Nothing} = nothing
+)
+    # Вычислить безразмерные числа подобия
+    dimens = dimensionless_params(;
         L_phys = L_phys,
         v_char = v_char,
         n_char = n_char,
@@ -109,23 +124,114 @@ let
         T_char = T_char,
         mi = mi,
         me = me,
-        β0 = β0
+        β0 = β0,
+        σ0_Spitzer = σ0_Spitzer
+    )
+
+    # Вычислить ν_m0 из проводимости Спитцера (если не переопределено)
+    if ν_m0_override === nothing
+        ν_m0 = compute_nu_m0(H_char, mi, L_phys, v_char, σ0_Spitzer; calibration=1.0)
+    else
+        ν_m0 = ν_m0_override
+    end
+
+    # Безразмерные массы (относительно массы иона)
+    mi_nondim = 1.0
+    me_nondim = me / mi
+
+    # Температура ионизации (безразмерная, относительно T_char)
+    T_ion_nondim = 1.0  # По определению характерной температуры
+
+    # Скорость ионизации (безразмерная, относительно v_char)
+    v_a_nondim = v_a_ion / v_char
+
+    # Коэффициент ионизации (уже вычислен в dimensionless_params, или переопределен)
+    kI = (kI_override !== nothing) ? kI_override : dimens.kI
+
+    # Создать и вернуть готовый SimParams
+    return PartCount.SimParams(
+        L = 1.0,  # Нормированная длина канала
+        M = M,
+        mi = mi_nondim,
+        me = me_nondim,
+        T_ion = T_ion_nondim,
+        v_a = v_a_nondim,
+        n_a_left = n_a_left,
+        kI = kI,
+        kR = kR,
+        γ = 5.0 / 3.0,
+        ε = dimens.ε,
+        ν_m0 = ν_m0,
+        α = dimens.α,
+        α0 = dimens.α0,
+        ζ = dimens.ζ,
+        ε_dim = ε_dim,
+        H0_func = H0_func,
+        N1 = N1
+    )
+end
+
+# -------------------------------------------------------------------
+# Пример расчёта для третьего режима СПД-70 (данные из from_cw.jl)
+# -------------------------------------------------------------------
+let
+    L_phys = 0.04
+    v_char = 8461.7
+    n_char = 3.2837e17
+    H_char = 0.01172
+    T_char = 14.0 * 11604.5
+    mi = 1.391e-25
+    me = 9.11e-31
+    β0 = 1e-14
+    σ0_Spitzer = 0.905e7
+
+    params_dimens = dimensionless_params(;
+        L_phys = L_phys,
+        v_char = v_char,
+        n_char = n_char,
+        H_char = H_char,
+        T_char = T_char,
+        mi = mi,
+        me = me,
+        β0 = β0,
+        σ0_Spitzer = σ0_Spitzer
     )
 
     println("РЕЗУЛЬТАТЫ РАСЧЁТА БЕЗРАЗМЕРНЫХ ПАРАМЕТРОВ ДЛЯ СПД-70 (РЕЖИМ 3)")
     println("==================================================")
-    println("Характерное время t_char = ", params.t_char, " с")
-    println("ε  = ", params.ε)
-    println("κ  = ", params.κ)
-    println("ζ  = ", params.ζ)
-    println("ξ  = ", params.ξ)
-    println("α  = ξ² = ", params.α)
-    println("α0 = ", params.α0)
-    println("kI = ", params.kI)
-    println("vA = ", params.vA, " м/с")
-    println("Сила на единицу площади (безразмерная) = ", params.force)
-    println("\nСкопируйте следующие строки в main.jl для инициализации SimParams:")
-    println("--------------------------------------------------")
-    @printf("    ε=%.3f, κ=%.3f, ζ=%.3f, ξ=%.3f, α=%.3e, α0=%.1f, kI=%.3f,\n",
-            params.ε, params.κ, params.ζ, params.ξ, params.α, params.α0, params.kI)
+    println("ε  = ", params_dimens.ε)
+    println("κ  = ", params_dimens.κ)
+    println("ζ  = ", params_dimens.ζ)
+    println("α  = ", params_dimens.α)
+    println("α0 = ", params_dimens.α0)
+    println("kI = ", params_dimens.kI)
+
+    ν_m0_calc = compute_nu_m0(H_char, mi, L_phys, v_char, σ0_Spitzer; calibration=1.0)
+    println("\nν_m0 (вычислено, calibration=1.0) = ", ν_m0_calc)
+    println("ν_m0 (в коде используется) = 0.912")
+
+    v_a_default = 0.040780141843971635 * v_char
+    sim_params_with_calib = params_from_physics(;
+        L_phys = L_phys,
+        v_char = v_char,
+        n_char = n_char,
+        H_char = H_char,
+        T_char = T_char,
+        mi = mi,
+        me = me,
+        β0 = β0,
+        σ0_Spitzer = σ0_Spitzer,
+        v_a_ion = v_a_default,
+        n_a_left = 10.0,
+        kR = 0.0,
+        ν_m0_override = 0.912,
+        kI_override = 0.16
+    )
+
+    println("\nПараметры для симуляции:")
+    println("L=1.0, M=100")
+    @printf("mi=%.1f, me=%.3e\n", sim_params_with_calib.mi, sim_params_with_calib.me)
+    @printf("ε=%.3e, ν_m0=%.3f, α=%.3e, α0=%.1f, ζ=%.3f\n",
+            sim_params_with_calib.ε, sim_params_with_calib.ν_m0, sim_params_with_calib.α,
+            sim_params_with_calib.α0, sim_params_with_calib.ζ)
 end

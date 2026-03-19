@@ -28,6 +28,7 @@ include("src/numerical_funcs.jl")
 include("src/plasm.jl")
 include("src/particle_movement.jl")
 include("src/plotting.jl")
+include("calculate_params.jl")
 
 using .PartCount
 using .NumericalFunctionsSPT
@@ -64,11 +65,11 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
     N1 = params.N1
 
     # Сетки
-    x_grid = range(0, L, length=M+1)       # целые узлы
-    x_half = range(h/2, L-h/2, length=M)   # полуцелые узлы
+    x_grid = collect(range(0, L, length=M+1))       # целые узлы
+    x_half = collect(range(h/2, L-h/2, length=M))   # полуцелые узлы
 
     # Инициализация макрочастиц (начальное распределение)
-    particles = Particle[]
+    particles::Vector{PartCount.Particle} = []
     q0 = L / (N1 * M)                       # вес одной макрочастицы
     for k in 1:M
         z0 = x_grid[k] + h/2                 # центр ячейки
@@ -111,7 +112,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
     while t < total_time
         # 1. Осаждение частиц на сетку (получение n_ion, v_iy, v_iz, T_e)
-        deposit_particles(particles, x_grid, n_ion, v_iy, v_iz, T_e, h)
+        ParticleMovementSPT.deposit_particles(particles, x_grid, n_ion, v_iy, v_iz, T_e, h)
 
         # Сглаживание гидродинамических величин для устойчивости
         smooth_field(n_ion, 4)
@@ -161,7 +162,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
         # 9. Вычисление продольного поля E_z (явная формула)
         compute_Ez(E_z, H_x_old, H_x_half, j_old, j, n_ion, T_e, v_iy, n_a_new,
-                   α0, ζ, kI, ε_dim, v_a, h, x_grid, H0_func)
+                   α0, ζ, kI, ε_dim, v_a, me, h, x_grid, H0_func)
 
         # Дополнительное сглаживание E_z
         Steklov_smooth(E_z, 10, h, L, 10)
@@ -180,8 +181,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
         push!(thrust_time, t+τ)
         push!(thrust_values, thrust_step / τ)
-        #Сглаживание тяги
-        Steklov_smooth(thrust_values, 3, h, L, 5)
+
         # 11. Добавление новых частиц от ионизации
         new_particles_ionisation(particles, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h)
 
@@ -219,14 +219,27 @@ end
 # Пример запуска с параметрами из статьи (случай с индукционными полями)
 # -------------------------------------------------------------------
 let
-    params = PartCount.SimParams(
-        L=4.0, M=100,
-        mi=1.0, me=6.55e-6,
-        T_ion=1.157, v_a=0.040780141843971635 , n_a_left=10, kI=0.16, kR=0.0,
-        γ=5/3, ε=0.064, ν_m0=0.912,
-        α=0.054, α0=524.8, ζ=0.007, ε_dim=1,
-        H0_func=z->1,
-        N1=100
+    # Физические параметры СПД-70 (режим 3, z=30 мм, криптон)
+    params = params_from_physics(;
+        L_phys = 0.04,
+        v_char = 8461.7,
+        n_char = 3.2837e17,
+        H_char = 0.01172,
+        T_char = 14.0 * 11604.5,
+        mi = 1.391e-25,
+        me = 9.11e-31,
+        β0 = 1e-14,
+        σ0_Spitzer = 0.905e7,
+        v_a_ion = 0.040780141843971635 * 8461.7,
+        n_a_left = 10.0,
+        kR = 0.0,
+        M = 100,
+        N1 = 100,
+        ε_dim = 1.0,
+        H0_func = z -> 1.0,
+        ν_m0_override = 0.912,
+        kI_override = 0.16
     )
+
     run_simulation(params, total_time=40.0, save_times=[10.0, 20.0, 30.0, 40.0], do_plot=true)
 end

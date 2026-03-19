@@ -60,7 +60,7 @@ export neutrals_evolution,
         M = length(T_old) - 1
         for i in 2:M
             ν_m = ν_m0 / T_old[i] ^ (3/2)
-            dvz = (vz[i+1] - vz[i-1]) / (2h)
+            dvz = (vz[i+1] - vz[i-1]) / (2*h)
             Q_collision = (γ - 1) * (mi / (mi + me)) * ν_m * j[i] ^ 2 / n[i]
             Q_ionisation = (γ - 1) * kI * n_a[i] * n[i]
             T_new[i] = T_old[i] + τ * (Q_collision + Q_ionisation - (γ - 1) * T_old[i] * dvz)
@@ -125,7 +125,7 @@ export neutrals_evolution,
         for i in 2:M
             A = α / (n[i] * h ^ 2)          # исправлено: n[i]
             B = (ν_m0 / T[i] ^ (3/2)) * (τ / h ^ 2)
-            dvz = (vz[i+1] - vz[i-1]) / (2h)
+            dvz = (vz[i+1] - vz[i-1]) / (2*h)
             C = vz[i] * τ / (4h)
             D = (α * τ / (n[i] * h ^ 2)) * dvz
 
@@ -196,6 +196,7 @@ export neutrals_evolution,
         kI::Float64,
         ε_dim::Float64,
         va::Float64,
+        me::Float64,
         h::Float64,
         x_grid::AbstractVector{Float64},
         H0_func,
@@ -225,21 +226,19 @@ export neutrals_evolution,
         # Вычисление производной δnT/δz
         d_nT = zeros(M+1)
         for i in 2:M
-            d_nT[i] = (n_s[i+1] * T_s[i+1] - n_s[i-1] * T_s[i-1]) / (2h)
+            d_nT[i] = (n_s[i+1] * T_s[i+1] - n_s[i-1] * T_s[i-1]) / (2*h)
         end
         d_nT[1] = d_nT[2]
         d_nT[M+1] = d_nT[M]
 
-        # Исправлены неопределённые переменные: n_safe и ζ.
-        # Предположим, что ζ = 1 (можно уточнить) и используем защиту от деления на ноль
-        ζ = 1.0   # или передавать как аргумент
-        n_safe = max.(n, N_REG)   # защита от нуля
+        # Защита от деления на ноль
+        n_safe = max.(n, N_REG)
 
         for i in 1:M+1
             term1 = H_star[i] * vy[i]
             term2 = (α0 / n_safe[i]) * H_star[i] * j_mid[i]
             term3 = (ζ * α0 / n_safe[i]) * d_nT[i]
-            term4 = 6.55e-6 * (kI / ε_dim) * n_a[i] * va
+            term4 = me * (kI / ε_dim) * n_a[i] * va
             Ez[i] = term1 - term2 - term3 - term4
         end
         # Дополнительное искуственное диффузное сглаживание
