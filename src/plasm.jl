@@ -59,11 +59,12 @@ export neutrals_evolution,
     )
         M = length(T_old) - 1
         for i in 2:M
-            ν_m = ν_m0 / T_old[i] ^ (3/2)
+            ν_m = ν_m0 / max(T_old[i], T_FLOOR) ^ (3/2)
             dvz = (vz[i+1] - vz[i-1]) / (2*h)
-            Q_collision = (γ - 1) * (mi / (mi + me)) * ν_m * j[i] ^ 2 / n[i]
+            Q_collision = (γ - 1) * (mi / (mi + me)) * ν_m * j[i] ^ 2 / max(n[i], N_FLOOR)
             Q_ionisation = (γ - 1) * kI * n_a[i] * n[i]
-            T_new[i] = T_old[i] + τ * (Q_collision + Q_ionisation - (γ - 1) * T_old[i] * dvz)
+            T_new[i] = max(T_old[i] + τ * (Q_collision + Q_ionisation - (γ - 1) * T_old[i] * dvz),
+                           T_FLOOR)
         end
         T_new[1] = T_new[2]
         T_new[M+1] = T_new[M]
@@ -123,28 +124,30 @@ export neutrals_evolution,
         c = zeros(M+1)
         d = zeros(M+1)
         for i in 2:M
-            A = α / (n[i] * h ^ 2)          # исправлено: n[i]
-            B = (ν_m0 / T[i] ^ (3/2)) * (τ / h ^ 2)
+            ni = max(n[i], N_FLOOR)
+            Ti = max(T[i], T_FLOOR)
+            A = α / (ni * h ^ 2)
+            B = (ν_m0 / Ti ^ (3/2)) * (τ / h ^ 2)
             dvz = (vz[i+1] - vz[i-1]) / (2*h)
             C = vz[i] * τ / (4h)
-            D = (α * τ / (n[i] * h ^ 2)) * dvz
+            D = (α * τ / (ni * h ^ 2)) * dvz
 
             a[i] = - A - (B + D) - C
             b[i] = 1.0 + 2A + 2(B + D)
             c[i] = - A - (B + D) + C
-            dj = (j_old[i+1] - j_old[i-1]) / (2h)    # Производную плотности тока по координате 
-            d[i] = (ν_m0 / T[i] ^ (3/2)) * j_old[i] - H_star[i] * vz[i] +
-                (α / n[i]) * j_old[i] * dvz + (α / n[i]) * vz[i] * dj
+            dj = (j_old[i+1] - j_old[i-1]) / (2h)    # Производную плотности тока по координате
+            d[i] = (ν_m0 / Ti ^ (3/2)) * j_old[i] - H_star[i] * vz[i] +
+                (α / ni) * j_old[i] * dvz + (α / ni) * vz[i] * dj
         end
         # Костыль, но просто символьно определяю тип ГУ 
         # (в данном случае говорю что азимутальные токи на границах равны нулю)
-        if bc_type == :j0 
+        if bc_type == :j0
             # Левая граница
             dj_left = j_old[2] / h
-            E_y[1] = (-H_star[1] + (α / n[1]) * dj_left) * vz[1]    # Формула (34)
+            E_y[1] = (-H_star[1] + (α / max(n[1], N_FLOOR)) * dj_left) * vz[1]
             # Правая граница
             dj_right = -j_old[M] / h
-            E_y[M+1] = (-H_star[M+1] + (α / n[M+1]) * dj_right) * vz[M+1]
+            E_y[M+1] = (-H_star[M+1] + (α / max(n[M+1], N_FLOOR)) * dj_right) * vz[M+1]
             if M - 1 > 0
                 d[2] -= a[2] * E_y[1]
                 a[2] = 0.0

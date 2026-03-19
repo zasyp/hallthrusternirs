@@ -186,7 +186,7 @@ export deposit_particles, move_particles, new_particles_ionisation, remove_inact
         T_ion::Float64,         # исправлено: число, не вектор
         h::Float64
     )
-        for i in eachindex(x_grid)
+        for i in 1:length(x_grid)-1   # исключаем выходной узел (z=L): ионы там сразу вылетают
             q_new = kI * n_a_new[i] * n_ion[i] * τ * h # Полное число частиц рождающихся в ячейке за временной шаг
             q_new = min(q_new, n_a_new[i] * h) # Их не должно быть больше, чем нейтралов в этой ячейке
             if q_new < MIN_PARTICLE_MASS

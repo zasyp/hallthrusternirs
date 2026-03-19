@@ -45,7 +45,8 @@ function dimensionless_params(;
     α0 = κ * ξ * (λi / λz) * sqrt(λi / λe)
     kI = β0 * n_char * t_char
 
-    force = mi * n_char * L_phys ^ 2 * v_char ^ 2 / t_char
+    # Масштаб силы: импульс / время = m * n * L * v^2
+    force = mi * n_char * L_phys * v_char ^ 2
 
     return (ε=ε, κ=κ, ζ=ζ, ξ=ξ, α=α, α0=α0, kI=kI, t_char=t_char, vA=vA, force=force)
 end
@@ -80,20 +81,7 @@ end
                           ν_m0_override=nothing, kI_override=nothing)
 
 Вычисляет полный набор безразмерных параметров для SimParams из физических параметров СПД-70.
-
-Аргументы:
-- L_phys, v_char, n_char, H_char, T_char: физические масштабы
-- mi, me: массы иона и электрона, кг
-- β0: коэффициент ионизации, м³/с
-- σ0_Spitzer: проводимость Спитцера, СГС (по умолчанию 0.905e7)
-- v_a_ion: скорость ионизации, м/с (начальная скорость новых ионов)
-- n_a_left: граничная концентрация нейтралов слева
-- kR: коэффициент рекомбинации
-- M, N1, ε_dim, H0_func: параметры сетки и конфигурации
-- ν_m0_override: если задано, использовать это значение вместо расчетного
-- kI_override: если задано, использовать это значение вместо расчетного
-
-Возвращает: ready-to-use SimParams для run_simulation()
+Возвращает кортеж (sim_params, force_scale, L_phys, v_char) для преобразования размерностей.
 """
 function params_from_physics(;
     L_phys::Float64,
@@ -105,7 +93,7 @@ function params_from_physics(;
     me::Float64,
     β0::Float64,
     σ0_Spitzer::Float64 = 0.905e7,
-    v_a_ion::Float64 = 0.0408 * 8461.7,   # По умолчанию значение из текущей симуляции
+    v_a_ion::Float64 = 0.0408 * 8461.7,
     n_a_left::Float64 = 10.0,
     kR::Float64 = 0.0,
     M::Int = 100,
@@ -115,7 +103,6 @@ function params_from_physics(;
     ν_m0_override::Union{Float64, Nothing} = nothing,
     kI_override::Union{Float64, Nothing} = nothing
 )
-    # Вычислить безразмерные числа подобия
     dimens = dimensionless_params(;
         L_phys = L_phys,
         v_char = v_char,
@@ -128,29 +115,20 @@ function params_from_physics(;
         σ0_Spitzer = σ0_Spitzer
     )
 
-    # Вычислить ν_m0 из проводимости Спитцера (если не переопределено)
     if ν_m0_override === nothing
         ν_m0 = compute_nu_m0(H_char, mi, L_phys, v_char, σ0_Spitzer; calibration=1.0)
     else
         ν_m0 = ν_m0_override
     end
 
-    # Безразмерные массы (относительно массы иона)
     mi_nondim = 1.0
     me_nondim = me / mi
-
-    # Температура ионизации (безразмерная, относительно T_char)
-    T_ion_nondim = 1.0  # По определению характерной температуры
-
-    # Скорость ионизации (безразмерная, относительно v_char)
+    T_ion_nondim = 1.0
     v_a_nondim = v_a_ion / v_char
-
-    # Коэффициент ионизации (уже вычислен в dimensionless_params, или переопределен)
     kI = (kI_override !== nothing) ? kI_override : dimens.kI
 
-    # Создать и вернуть готовый SimParams
-    return PartCount.SimParams(
-        L = 1.0,  # Нормированная длина канала
+    sim_params = PartCount.SimParams(
+        L = 1.0,
         M = M,
         mi = mi_nondim,
         me = me_nondim,
@@ -169,6 +147,10 @@ function params_from_physics(;
         H0_func = H0_func,
         N1 = N1
     )
+
+    force_scale = dimens.force
+
+    return (sim_params, force_scale, L_phys, v_char)
 end
 
 # -------------------------------------------------------------------
@@ -197,7 +179,7 @@ let
         σ0_Spitzer = σ0_Spitzer
     )
 
-    println("РЕЗУЛЬТАТЫ РАСЧЁТА БЕЗРАЗМЕРНЫХ ПАРАМЕТРОВ ДЛЯ СПД-70 (РЕЖИМ 3)")
+    println("РЕЗУЛЬТАТЫ РАСЧЁТА БЕЗРАЗМЕРНЫХ ПАРАМЕТРОВ ДЛЯ СПД-70")
     println("==================================================")
     println("ε  = ", params_dimens.ε)
     println("κ  = ", params_dimens.κ)
@@ -211,7 +193,7 @@ let
     println("ν_m0 (в коде используется) = 0.912")
 
     v_a_default = 0.040780141843971635 * v_char
-    sim_params_with_calib = params_from_physics(;
+    (sim_params_with_calib, force_scale, _, _) = params_from_physics(;
         L_phys = L_phys,
         v_char = v_char,
         n_char = n_char,
@@ -234,4 +216,5 @@ let
     @printf("ε=%.3e, ν_m0=%.3f, α=%.3e, α0=%.1f, ζ=%.3f\n",
             sim_params_with_calib.ε, sim_params_with_calib.ν_m0, sim_params_with_calib.α,
             sim_params_with_calib.α0, sim_params_with_calib.ζ)
+    @printf("\nМасштаб силы: force_scale = %.3e Н\n", force_scale)
 end

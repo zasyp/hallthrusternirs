@@ -21,6 +21,7 @@
 
 using LinearAlgebra
 using Plots
+using Statistics
 
 # Подключение модулей (предполагается, что они находятся в той же директории)
 include("src/structs.jl")
@@ -69,20 +70,20 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
     x_half = collect(range(h/2, L-h/2, length=M))   # полуцелые узлы
 
     # Инициализация макрочастиц (начальное распределение)
+    # Физичное начало: свежеионизированные ионы наследуют скорость нейтралов (v_a),
+    # азимутальная скорость нулевая (E×B-дрейф нарастает со временем).
     particles::Vector{PartCount.Particle} = []
     q0 = L / (N1 * M)                       # вес одной макрочастицы
     for k in 1:M
         z0 = x_grid[k] + h/2                 # центр ячейки
-        for s in 1:N1
-            φ = 2π*(s-1)/N1 + π/N1 + k*sqrt(2)
-            vy = 5.8 * cos(φ)
-            vz = 5.8 * sin(φ)
-            push!(particles, Particle(z0, vy, vz, T_ion, q0, true))
+        for _ in 1:N1
+            push!(particles, Particle(z0, 0.0, v_a, T_ion, q0, true))
         end
     end
 
-    # Начальное распределение нейтралов (быстро спадающее)
-    n_a_old = n_a_left * exp.(-5 * x_grid / L)
+    # Начальное распределение нейтралов: самосогласованный профиль при равномерной
+    # начальной ионной плотности n_i≈1 (безразм.): dn_a/dz = -(kI/v_a)*n_a
+    n_a_old = n_a_left .* exp.(-(kI / v_a) .* x_grid)
 
     # Поля
     H_x_half = zeros(M)          # магнитное поле на полуцелых
@@ -122,9 +123,11 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
         # 2. Определение шага по времени с учётом условий Куранта
         max_vz = max(maximum(abs.(v_iz)), 1e-12)
-        ν_m_grid = ν_m0 ./ max.(T_e, PlasmaDynamics.T_FLOOR).^(3/2)
-        ν_max = maximum(ν_m_grid)
-        τ_coll = 0.5 / max(ν_max, 1e-8)
+        # Для τ_coll используем физически разумный минимум T: 0.01 безразм. ≈ 0.14 эВ при T_char=14 эВ,
+        # чтобы избежать заморозки шага при T→T_FLOOR=1e-6
+        T_min_dt = max(minimum(T_e), 0.01)
+        ν_m_max  = ν_m0 / T_min_dt ^ (3/2)
+        τ_coll   = 0.5 / ν_m_max
         τ = min(h / v_a, 0.2 * h / max_vz, τ_coll, total_time - t)
 
         # 3. Вычисление тока из H на старом слое
@@ -219,27 +222,63 @@ end
 # Пример запуска с параметрами из статьи (случай с индукционными полями)
 # -------------------------------------------------------------------
 let
-    # Физические параметры СПД-70 (режим 3, z=30 мм, криптон)
-    params = params_from_physics(;
+    # Физические параметры СПД-70 (z=30 мм, криптон)
+    n_char = 3.2837e17
+    mi_phys = 1.391e-25
+    (params, force_scale, L_phys, v_char) = params_from_physics(;
         L_phys = 0.04,
         v_char = 8461.7,
-        n_char = 3.2837e17,
+        n_char = n_char,
         H_char = 0.01172,
         T_char = 14.0 * 11604.5,
-        mi = 1.391e-25,
+        mi = mi_phys,
         me = 9.11e-31,
         β0 = 1e-14,
         σ0_Spitzer = 0.905e7,
         v_a_ion = 0.040780141843971635 * 8461.7,
         n_a_left = 10.0,
         kR = 0.0,
-        M = 100,
-        N1 = 100,
+        M = 200,
+        N1 = 200,
         ε_dim = 1.0,
         H0_func = z -> 1.0,
         ν_m0_override = 0.912,
         kI_override = 0.16
     )
 
-    run_simulation(params, total_time=40.0, save_times=[10.0, 20.0, 30.0, 40.0], do_plot=true)
+    snapshots, thrust_time, thrust_values = run_simulation(params, total_time=100.0, save_times=[40.0, 50.0, 60.0, 100.0], do_plot=false)
+
+    # Преобразование в размерные единицы (СИ)
+    t_char = L_phys / v_char
+    # thrust_time из симуляции - в безразмерных единицах (характерные времена)
+    thrust_time_s = thrust_time .* t_char   # в секундах
+    thrust_time_ms = thrust_time_s .* 1000  # в миллисекундах
+
+    # thrust_values уже содержит thrust_step/τ
+    thrust_values_SI = thrust_values .* force_scale  # в Н
+    thrust_values_mN = thrust_values_SI .* 1000      # в мН
+
+    # Применение движущегося среднего фильтра для сглаживания переходных процессов
+    function moving_average(data::Vector{Float64}, window::Int)
+        n = length(data)
+        result = similar(data)
+        for i in 1:n
+            start_idx = max(1, i - div(window, 2))
+            end_idx = min(n, i + div(window, 2))
+            result[i] = mean(data[start_idx:end_idx])
+        end
+        return result
+    end
+
+    thrust_values_mN = moving_average(thrust_values_mN, 10)
+
+    println("\n=== РАЗМЕРНЫЕ ЕДИНИЦЫ ===")
+    println("Масштаб силы: $force_scale Н")
+    println("Характерное время: $t_char с = $(t_char*1e6) µс")
+    println("Максимальная тяга: $(maximum(thrust_values_mN)) мН")
+    println("Средняя тяга (после начальных переходных): $(mean(thrust_values_mN[100:end])) мН")
+    println("Средняя тяга (вторая половина): $(mean(thrust_values_mN[Int(length(thrust_values_mN)÷2):end])) мН")
+
+    plot_results(snapshots, thrust_time_ms, thrust_values_mN, [40.0, 50.0, 60.0, 100.0], force_scale;
+                 L_phys=L_phys, v_char=v_char, n_char=n_char, t_char=t_char, mi=mi_phys)
 end
