@@ -15,7 +15,8 @@ export plot_results
 - Остальные величины пересчитываются в СИ внутри функции
 """
 function plot_results(snapshots, thrust_time, thrust_values, save_times, force_scale=1.0;
-                      L_phys=1.0, v_char=1.0, n_char=1.0, t_char=1.0, mi=1.0, e_charge=1.6e-19)
+                      L_phys=1.0, v_char=1.0, n_char=1.0, t_char=1.0, mi=1.0, e_charge=1.6e-19,
+                      H_char=0.01172)
     if !isempty(snapshots)
         # Масштабы перевода в СИ
         E_char = mi * v_char^2 / (e_charge * L_phys)  # В/м
@@ -27,10 +28,11 @@ function plot_results(snapshots, thrust_time, thrust_values, save_times, force_s
         p2 = plot(title="Ионная плотность n_i",      xlabel="z (м)", ylabel="n_i (10¹⁷ м⁻³)")
         p3 = plot(title="Скорость ионов v_z",        xlabel="z (м)", ylabel="v_z (км/с)")
         p4 = plot(title="Электрическое поле E_z",    xlabel="z (м)", ylabel="E_z (В/м)")
+        p5 = plot(title="Магнитное поле H*",          xlabel="z (м)", ylabel="H (Тл)")
         colors = palette(:tab10, length(times))
 
         for (idx, t) in enumerate(times)
-            z, n_a, n, v_z, E_z = snapshots[t]
+            z, n_a, n, v_z, E_z, H_total = snapshots[t]
             t_ms = round(t * t_char_ms, digits=3)
             lbl = "t=$(t_ms) мс"
             z_m   = z   .* L_phys           # безразм. → м
@@ -38,14 +40,16 @@ function plot_results(snapshots, thrust_time, thrust_values, save_times, force_s
             n_p   = n   .* (n_char * 1e-17)
             vz_p  = v_z .* (v_char * 1e-3)  # м/с → км/с
             Ez_p  = E_z .* E_char            # безразм. → В/м
+            H_p   = H_total .* H_char        # безразм. → Тл
 
             plot!(p1, z_m, n_a_p, label=lbl, color=colors[idx])
             plot!(p2, z_m, n_p,   label=lbl, color=colors[idx])
             plot!(p3, z_m, vz_p,  label=lbl, color=colors[idx])
             plot!(p4, z_m, Ez_p,  label=lbl, color=colors[idx])
+            plot!(p5, z_m, H_p,   label=lbl, color=colors[idx])
         end
 
-        plot(p1, p2, p3, p4, layout=4, size=(1000, 700))
+        plot(p1, p2, p3, p4, p5, layout=(3,2), size=(1100, 900))
         savefig("profiles.png")
         display(current())
     end

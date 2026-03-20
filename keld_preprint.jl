@@ -217,28 +217,28 @@ function intermediate_temperature_hybrid!(T_new::Vector{Float64}, T_old::Vector{
                                           τ::Float64, γ::Float64, mi_over_mΣ::Float64,
                                           ν_m0::Float64, kI::Float64, h::Float64)
     M = length(T_old) - 1
-    
+
     for k in 2:M
         n_safe = max(n[k], N_FLOOR)
         T_safe = max(T_old[k], T_FLOOR)
-        
+
         ν_m = ν_m0 / T_safe^(3/2)
-        
+
         # Центральная разность для dvz/dz
         dvz = (vz[k+1] - vz[k-1]) / (2h)
-        
+
         # Источники: джоулев нагрев и ионизационный нагрев
         Q_coll = (γ-1) * mi_over_mΣ * ν_m * j[k]^2 / n_safe
         Q_ion = (γ-1) * kI * n_a[k] * n_safe
-        
+
         T_new[k] = T_old[k] + τ * (Q_coll + Q_ion - (γ-1) * T_old[k] * dvz)
         T_new[k] = max(T_new[k], T_FLOOR)
     end
-    
+
     # Экстраполяция на границы
     T_new[1] = T_new[2]
     T_new[M+1] = T_new[M]
-    
+
     return T_new
 end
 
@@ -717,12 +717,13 @@ function run_simulation(;
     # Инициализация макрочастиц (30)
     particles = Particle[]
     q0 = L / (N1 * M)
+    v_amplitude = sqrt(3 * T_ion)           # правильная тепловая скорость: v_rms = √(3T)
     for k in 1:M
         z0 = x_grid[k] + h/2   # центр ячейки
         for s in 1:N1
             φ = 2π*(s-1)/N1 + π/N1 + k*sqrt(2)
-            vy = 5.8 * cos(φ)
-            vz = 5.8 * sin(φ)
+            vy = v_amplitude * cos(φ)
+            vz = v_amplitude * sin(φ)
             push!(particles, Particle(z0, vy, vz, T_ion, q0, true))
         end
     end

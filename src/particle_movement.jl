@@ -184,10 +184,13 @@ export deposit_particles, move_particles, new_particles_ionisation, remove_inact
         kI::Float64,
         v_a::Float64,           # исправлено: число, не вектор
         T_ion::Float64,         # исправлено: число, не вектор
-        h::Float64
+        h::Float64,
+        ionisation_factor::Float64 = 1.0  # Плавное включение ионизации (ДОБАВЛЕНО)
     )
         for i in 1:length(x_grid)-1   # исключаем выходной узел (z=L): ионы там сразу вылетают
-            q_new = kI * n_a_new[i] * n_ion[i] * τ * h # Полное число частиц рождающихся в ячейке за временной шаг
+            # Полное число частиц рождающихся в ячейке за временной шаг
+            # Умножаем на ionisation_factor для плавного включения в начале
+            q_new = ionisation_factor * kI * n_a_new[i] * n_ion[i] * τ * h
             q_new = min(q_new, n_a_new[i] * h) # Их не должно быть больше, чем нейтралов в этой ячейке
             if q_new < MIN_PARTICLE_MASS
                 continue

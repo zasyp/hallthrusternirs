@@ -70,23 +70,28 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
     x_half = collect(range(h/2, L-h/2, length=M))   # полуцелые узлы
 
     # Инициализация макрочастиц (начальное распределение)
-    # Физичное начало: свежеионизированные ионы наследуют скорость нейтралов (v_a),
-    # азимутальная скорость нулевая (E×B-дрейф нарастает со временем).
+    # Согласно модели (keld_preprint.jl): частицы распределены по углам окружности в пространстве скоростей
+    # Амплитуда скорости выбирается из максвеллиана: v_rms = sqrt(3*T_ion)
     particles::Vector{PartCount.Particle} = []
     q0 = L / (N1 * M)                       # вес одной макрочастицы
+    v_amplitude = sqrt(3 * T_ion)           # правильная тепловая скорость (v_rms ≈ 1.73 для T_ion=1.0)
     for k in 1:M
         z0 = x_grid[k] + h/2                 # центр ячейки
-        for _ in 1:N1
-            push!(particles, Particle(z0, 0.0, v_a, T_ion, q0, true))
+        for s in 1:N1
+            φ = 2π*(s-1)/N1 + π/N1 + k*sqrt(2)  # случайная фаза для каждой ячейки
+            vy = v_amplitude * cos(φ)            # азимутальная скорость из максвеллиана
+            vz = v_amplitude * sin(φ)            # продольная скорость из максвеллиана
+            push!(particles, Particle(z0, vy, vz, T_ion, q0, true))
         end
     end
 
-    # Начальное распределение нейтралов: самосогласованный профиль при равномерной
-    # начальной ионной плотности n_i≈1 (безразм.): dn_a/dz = -(kI/v_a)*n_a
-    n_a_old = n_a_left .* exp.(-(kI / v_a) .* x_grid)
+    # Начальное распределение нейтралов: экспоненциальный профиль согласно модели (keld_preprint.jl)
+    n_a_old = n_a_left .* exp.(-5 .* x_grid)
 
     # Поля
-    H_x_half = zeros(M)          # магнитное поле на полуцелых
+    # H_x_half — индуцированное магнитное поле (от токов плазмы), начинается с нуля
+    # Внешнее поле H_0(z) добавляется отдельно через H0_func в electric_field_solver и compute_Ez
+    H_x_half = zeros(M)
     j = zeros(M+1)               # ток на целых
     E_y = zeros(M+1)             # азимутальное поле
     E_z = zeros(M+1)             # продольное поле
@@ -104,7 +109,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
     E_z_old = copy(E_z)
 
     # Снимки и диагностика
-    snapshots = Dict{Float64, Tuple{Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64}}}()
+    snapshots = Dict{Float64, Tuple{Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64}}}()
     thrust_time = Float64[]
     thrust_values = Float64[]
 
@@ -114,12 +119,6 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
     while t < total_time
         # 1. Осаждение частиц на сетку (получение n_ion, v_iy, v_iz, T_e)
         ParticleMovementSPT.deposit_particles(particles, x_grid, n_ion, v_iy, v_iz, T_e, h)
-
-        # Сглаживание гидродинамических величин для устойчивости
-        smooth_field(n_ion, 4)
-        smooth_field(v_iy, 4)
-        smooth_field(v_iz, 4)
-        smooth_field(T_e, 4)
 
         # 2. Определение шага по времени с учётом условий Куранта
         max_vz = max(maximum(abs.(v_iz)), 1e-12)
@@ -135,7 +134,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
         # 4. Промежуточная температура (первый этап, без переноса)
         T_tilde = similar(T_e)
-        intermidiate_temperature(T_tilde, T_e, n_ion, v_iz, j, n_a_old, τ, γ, mi, me, ν_m0, kI, h)
+        T_tilde = intermidiate_temperature(T_tilde, T_e, n_ion, v_iz, j, n_a_old, τ, γ, mi, me, ν_m0, kI, h, ζ)
 
         # 5. "Отемпературивание" частиц (интерполяция температуры на частицы)
         for p in particles
@@ -146,7 +145,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
         # 6. Обновление концентрации нейтралов
         n_a_new = similar(n_a_old)
-        neutrals_evolution(n_a_new, n_a_old, n_ion, τ, v_a, kI, h, n_a_left)
+        n_a_new = neutrals_evolution(n_a_new, n_a_old, n_ion, τ, v_a, kI, h, n_a_left)
 
         # 7. Сохранение старых полей для временной интерполяции
         copyto!(H_x_old, H_x_half)
@@ -158,17 +157,11 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         E_y, H_x_half, j = electric_field_solver(E_y, H_x_old, j_old, n_ion, v_iz, T_e,
                                                   τ, α, ν_m0, h, x_grid, H0_func, :j0)
 
-        # Сглаживание полей по методу Стеклова для подавления шума
-        Steklov_smooth(E_y, 10, h, L, 10)
-        Steklov_smooth(H_x_half, 10, h, L, 10)
-        Steklov_smooth(j, 10, h, L, 10)
-
         # 9. Вычисление продольного поля E_z (явная формула)
         compute_Ez(E_z, H_x_old, H_x_half, j_old, j, n_ion, T_e, v_iy, n_a_new,
                    α0, ζ, kI, ε_dim, v_a, me, h, x_grid, H0_func)
 
-        # Дополнительное сглаживание E_z
-        Steklov_smooth(E_z, 10, h, L, 10)
+        # Сглаживание E_z (только внутренняя диффузия в compute_Ez, без дополнительного)
 
         # 10. Движение макрочастиц под действием полей
         counters = Counters(0, 0, 0, 0)
@@ -186,7 +179,8 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         push!(thrust_values, thrust_step / τ)
 
         # 11. Добавление новых частиц от ионизации
-        new_particles_ionisation(particles, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h)
+        ionisation_ramp = min(1.0, step / 50)  # Плавное включение за первые 50 шагов
+        new_particles_ionisation(particles, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h, ionisation_ramp)
 
         # 12. Удаление частиц, покинувших область или рекомбинировавших
         remove_inactive_particles(particles, L, τ, kR)
@@ -194,7 +188,14 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         # 13. Сохранение снимков в заданные моменты времени
         for st in save_times
             if abs(t+τ - st) < τ/2 && !haskey(snapshots, st)
-                snapshots[st] = (copy(x_grid), copy(n_a_new), copy(n_ion), copy(v_iz), copy(E_z))
+                # Полное магнитное поле на целых узлах (индуцированное + внешнее)
+                H_total = zeros(M+1)
+                H_total[1] = H_x_half[1] + H0_func(x_grid[1])
+                for ii in 2:M
+                    H_total[ii] = (H_x_half[ii-1] + H_x_half[ii]) / 2 + H0_func(x_grid[ii])
+                end
+                H_total[M+1] = H_x_half[M] + H0_func(x_grid[M+1])
+                snapshots[st] = (copy(x_grid), copy(n_a_new), copy(n_ion), copy(v_iz), copy(E_z), copy(H_total))
             end
         end
 
@@ -241,12 +242,21 @@ let
         M = 200,
         N1 = 200,
         ε_dim = 1.0,
-        H0_func = z -> 1.0,
+        H0_func = z -> begin
+            # Колокольный профиль магнитного поля СПД-70 (безразмерный, z ∈ [0,1])
+            # Максимум вблизи выхода канала (z_peak ≈ 0.75L)
+            # Фоновое поле ~0.04 на аноде, ~1.0 на выходе
+            z_peak = 0.75
+            σ_left = 0.35    # пологий подъём со стороны анода
+            σ_right = 0.15   # крутой спад за выходом
+            σ = z < z_peak ? σ_left : σ_right
+            0.04 + 0.96 * exp(-((z - z_peak) / σ)^2)
+        end,
         ν_m0_override = 0.912,
         kI_override = 0.16
     )
 
-    snapshots, thrust_time, thrust_values = run_simulation(params, total_time=100.0, save_times=[40.0, 50.0, 60.0, 100.0], do_plot=false)
+    snapshots, thrust_time, thrust_values = Base.invokelatest(run_simulation, params, total_time=20.0, save_times=[10.0, 15.0, 16.0, 20.0], do_plot=false)
 
     # Преобразование в размерные единицы (СИ)
     t_char = L_phys / v_char
@@ -258,20 +268,6 @@ let
     thrust_values_SI = thrust_values .* force_scale  # в Н
     thrust_values_mN = thrust_values_SI .* 1000      # в мН
 
-    # Применение движущегося среднего фильтра для сглаживания переходных процессов
-    function moving_average(data::Vector{Float64}, window::Int)
-        n = length(data)
-        result = similar(data)
-        for i in 1:n
-            start_idx = max(1, i - div(window, 2))
-            end_idx = min(n, i + div(window, 2))
-            result[i] = mean(data[start_idx:end_idx])
-        end
-        return result
-    end
-
-    thrust_values_mN = moving_average(thrust_values_mN, 10)
-
     println("\n=== РАЗМЕРНЫЕ ЕДИНИЦЫ ===")
     println("Масштаб силы: $force_scale Н")
     println("Характерное время: $t_char с = $(t_char*1e6) µс")
@@ -280,5 +276,6 @@ let
     println("Средняя тяга (вторая половина): $(mean(thrust_values_mN[Int(length(thrust_values_mN)÷2):end])) мН")
 
     plot_results(snapshots, thrust_time_ms, thrust_values_mN, [40.0, 50.0, 60.0, 100.0], force_scale;
-                 L_phys=L_phys, v_char=v_char, n_char=n_char, t_char=t_char, mi=mi_phys)
+                 L_phys=L_phys, v_char=v_char, n_char=n_char, t_char=t_char, mi=mi_phys,
+                 H_char=0.01172)
 end
