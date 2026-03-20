@@ -62,8 +62,8 @@ export neutrals_evolution,
             ν_m = ν_m0 / max(T_old[i], T_FLOOR) ^ (3/2)
             dvz = (vz[i+1] - vz[i-1]) / (2*h)
             Q_collision = (γ - 1) * (mi / (mi + me)) * ν_m * j[i] ^ 2 / max(n[i], N_FLOOR)
-            Q_ionisation = (γ - 1) * kI * n_a[i] * n[i]
-            T_new[i] = max(T_old[i] + τ * (Q_collision + Q_ionisation - (γ - 1) * T_old[i] * dvz),
+            Q_ionisation = (γ - 1) * kI * n_a[i] * T_old[i]
+            T_new[i] = max(T_old[i] + τ * (Q_collision - Q_ionisation - (γ - 1) * T_old[i] * dvz),
                            T_FLOOR)
         end
         T_new[1] = T_new[2]
