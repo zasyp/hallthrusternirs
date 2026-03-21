@@ -167,9 +167,9 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         compute_Ez(E_z, H_x_old, H_x_half, j_old, j, n_ion, T_e, v_iy, n_a_new,
                    α0, ζ, kI, ε_dim, v_a, me, h, x_grid, H0_func)
 
-        # Сглаживание E_z (только внутренняя диффузия в compute_Ez, без дополнительного)
-        Steklov_smooth(E_z, 4, h, L, 10)
-        
+        # Сглаживание E_z для подавления численных пиков (Стеклов, окно 3, 2 прохода)
+        Steklov_smooth(E_z, 3, h, L, 2)
+
         # 10. Движение макрочастиц под действием полей
         counters = Counters(0, 0, 0, 0)
         ν_m_grid = ν_m0 ./ max.(T_e, PlasmaDynamics.T_FLOOR).^(3/2)   # частота столкновений на новом слое
@@ -281,5 +281,5 @@ let
 
     plot_results(snapshots, thrust_time_ms, thrust_values_mN, [40.0, 50.0, 60.0, 100.0], force_scale;
                  L_phys=L_phys, v_char=v_char, n_char=n_char, t_char=t_char, mi=mi_phys,
-                 H_char=0.01172)
+                 H_char=0.01172, H0_func=params.H0_func)
 end

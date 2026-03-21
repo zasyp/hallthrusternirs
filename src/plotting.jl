@@ -7,16 +7,19 @@ export plot_results
 
 """
     plot_results(snapshots, thrust_time, thrust_values, save_times, force_scale=1.0,
-                 L_phys=1.0, v_char=1.0, n_char=1.0, t_char=1.0, mi=1.0, e_charge=1.6e-19)
+                 L_phys=1.0, v_char=1.0, n_char=1.0, t_char=1.0, mi=1.0, e_charge=1.6e-19,
+                 H_char=0.01172, H0_func=nothing)
 
 Строит графики профилей и тяги.
 - thrust_values: размерная тяга в мН
 - thrust_time: время в мс
 - Остальные величины пересчитываются в СИ внутри функции
+- H0_func: функция внешнего магнитного поля (безразм. z → безразм. H), если задана —
+  выводится отдельный график `magnetic_field.png`
 """
 function plot_results(snapshots, thrust_time, thrust_values, save_times, force_scale=1.0;
                       L_phys=1.0, v_char=1.0, n_char=1.0, t_char=1.0, mi=1.0, e_charge=1.6e-19,
-                      H_char=0.01172)
+                      H_char=0.01172, H0_func=nothing)
     if !isempty(snapshots)
         # Масштабы перевода в СИ
         E_char = mi * v_char^2 / (e_charge * L_phys)  # В/м
@@ -28,7 +31,7 @@ function plot_results(snapshots, thrust_time, thrust_values, save_times, force_s
         p2 = plot(title="Ионная плотность n_i",      xlabel="z (м)", ylabel="n_i (10¹⁷ м⁻³)")
         p3 = plot(title="Скорость ионов v_z",        xlabel="z (м)", ylabel="v_z (км/с)")
         p4 = plot(title="Электрическое поле E_z",    xlabel="z (м)", ylabel="E_z (В/м)")
-        p5 = plot(title="Магнитное поле H*",          xlabel="z (м)", ylabel="H (Тл)")
+        p5 = plot(title="Полное магнитное поле H",   xlabel="z (м)", ylabel="H (Тл)")
         colors = palette(:tab10, length(times))
 
         for (idx, t) in enumerate(times)
@@ -52,6 +55,29 @@ function plot_results(snapshots, thrust_time, thrust_values, save_times, force_s
         plot(p1, p2, p3, p4, p5, layout=(3,2), size=(1100, 900))
         savefig("profiles.png")
         display(current())
+
+        # --- Отдельный график полного магнитного поля ---
+        p_mag = plot(title="Полное магнитное поле",
+                     xlabel="z (м)", ylabel="H (Тл)",
+                     size=(700, 450))
+        # Внешнее поле H0(z) — опорная кривая (если передана функция)
+        if H0_func !== nothing
+            z_fine = collect(range(0.0, 1.0, length=300))
+            H0_vals = H0_func.(z_fine) .* H_char
+            z_fine_m = z_fine .* L_phys
+            plot!(p_mag, z_fine_m, H0_vals,
+                  label="H₀ (внешнее)", linestyle=:dash, color=:black, linewidth=2)
+        end
+        for (idx, t) in enumerate(times)
+            z, _, _, _, _, H_total = snapshots[t]
+            t_ms = round(t * t_char_ms, digits=3)
+            lbl = "t=$(t_ms) мс"
+            z_m = z .* L_phys
+            H_p = H_total .* H_char
+            plot!(p_mag, z_m, H_p, label=lbl, color=colors[idx])
+        end
+        savefig(p_mag, "magnetic_field.png")
+        display(p_mag)
     end
 
     if !isempty(thrust_time)
