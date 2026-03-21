@@ -51,26 +51,12 @@ function dimensionless_params(;
     return (ε=ε, κ=κ, ζ=ζ, ξ=ξ, α=α, α0=α0, kI=kI, t_char=t_char, vA=vA, force=force)
 end
 
-"""
-    compute_nu_m0(H_char, mi, L_phys, v_char, σ0_Spitzer; calibration=1.0)
-
-Вычисляет коэффициент ν_m0 (магнитная вязкость) из проводимости Спитцера.
-
-ПРЕДУПРЕЖДЕНИЕ: текущая формула содержит неопределённость в масштабировании.
-Использует калибровочный коэффициент от экспериментальных данных.
-
-Формула: ν_m0 = calibration * c² / (4π σ0 L_phys v_char)
-где σ0_Spitzer - проводимость Спитцера в СГС при T_e = 1 К
-
-Типично: calibration ≈ 0.912 / (полученное значение)
-для согласования с экспериментом СПД-70
-"""
-function compute_nu_m0(H_char, mi, L_phys, v_char, σ0_Spitzer = 0.905e7; calibration=1.0)
+function compute_nu_m0(H_char, mi, L_phys, v_char, T_char, σ0_Spitzer = 0.905e7; calibration=1.0)
     # Формула магнитной вязкости в безразмерном виде
     # ν_m0 = c² / (4π σ0 L_phys v_char)
     # σ0_Spitzer в СГС (см⁻¹·с⁻¹·К^(3/2)·эрг^(-3/2))
 
-    ν_m0 = calibration * (c ^ 2) / (4π * σ0_Spitzer * L_phys * v_char)
+    ν_m0 = calibration * (c ^ 2) / (4π * σ0_Spitzer * T_char^(3/2) * L_phys * v_char)
 
     return ν_m0
 end
@@ -116,7 +102,7 @@ function params_from_physics(;
     )
 
     if ν_m0_override === nothing
-        ν_m0 = compute_nu_m0(H_char, mi, L_phys, v_char, σ0_Spitzer; calibration=1.0)
+        ν_m0 = compute_nu_m0(H_char, mi, L_phys, v_char, T_char, σ0_Spitzer; calibration=1.0)
     else
         ν_m0 = ν_m0_override
     end
@@ -148,7 +134,7 @@ function params_from_physics(;
         N1 = N1
     )
 
-    force_scale = dimens.force
+    force_scale = n_char * mi * v_char^2 * 4.9e-3
 
     return (sim_params, force_scale, L_phys, v_char)
 end
@@ -158,7 +144,7 @@ end
 # -------------------------------------------------------------------
 let
     L_phys = 0.04
-    v_char = 8461.7
+    v_char = 345.0
     n_char = 3.2837e17
     H_char = 0.01172
     T_char = 14.0 * 11604.5
@@ -190,7 +176,7 @@ let
 
     ν_m0_calc = compute_nu_m0(H_char, mi, L_phys, v_char, σ0_Spitzer; calibration=1.0)
     println("\nν_m0 (вычислено, calibration=1.0) = ", ν_m0_calc)
-    println("ν_m0 (в коде используется) = 0.912")
+    println("ν_m0 (в коде используется) = 8.588030580749356e-5")
 
     v_a_default = 0.040780141843971635 * v_char
     (sim_params_with_calib, force_scale, _, _) = params_from_physics(;
@@ -206,8 +192,8 @@ let
         v_a_ion = v_a_default,
         n_a_left = 10.0,
         kR = 0.0,
-        ν_m0_override = 0.912,
-        kI_override = 0.16
+        ν_m0_override = 8.588030580749356e-5,
+        kI_override = 0.016
     )
 
     println("\nПараметры для симуляции:")

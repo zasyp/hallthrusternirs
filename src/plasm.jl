@@ -85,14 +85,24 @@ export neutrals_evolution,
     function compute_current(
         j::Vector{Float64},
         H_x::Vector{Float64},
+        H0_func::Function,
+        x_half::AbstractVector{Float64},
         h::Float64
     )
         M = length(H_x)
         @assert length(j) == M+1
-        for i in 2:M
-            j[i] = (H_x[i] - H_x[i-1]) / h   # исправлено: j[i] = ...
+        
+        H_total = copy(H_x)
+        for i in 1:M
+            H_total[i] += H0_func(x_half[i])
         end
-        j[1] = j[M+1] = 0.0
+        
+        for i in 2:M
+            j[i] = (H_total[i] - H_total[i-1]) / h
+        end
+        j[1] = j[2]  # Экстраполяция
+        j[M+1] = j[M]  # Экстраполяция
+        
         return j
     end
 
@@ -134,14 +144,14 @@ export neutrals_evolution,
             ni = max(n[i], N_FLOOR)
             Ti = max(T[i], T_FLOOR)
             A = α / (ni * h ^ 2)
-            B = (ν_m0 / Ti ^ (3/2)) * (τ / h ^ 2)
+            B = (ν_m0 / Ti ^ (3/2)) * (τ / (2 * h ^ 2))   # j^{1/2} = j^0 + τ/(2h²)*ΔE, такой множитель даёт B=ν_m*τ/(2h²)
             dvz = (vz[i+1] - vz[i-1]) / (2*h)
             C = vz[i] * τ / (4h)
-            D = (α * τ / (ni * h ^ 2)) * dvz
+            D = (α * τ / (2 * ni * h ^ 2)) * dvz          # аналогично α/n*j^{1/2}*dvz: τ/(2h²)
 
             a[i] = - A - (B + D) - C
             b[i] = 1.0 + 2A + 2(B + D)
-            c[i] = - A - (B + D) + C
+            c[i] = - A - (B + D) - C
             dj = (j_old[i+1] - j_old[i-1]) / (2h)    # Производную плотности тока по координате
             d[i] = (ν_m0 / Ti ^ (3/2)) * j_old[i] - H_star[i] * vz[i] +
                 (α / ni) * j_old[i] * dvz + (α / ni) * vz[i] * dj
@@ -181,12 +191,14 @@ export neutrals_evolution,
             end
         end
         # Обновление Hx по формуле (37) (закон Фарадея)
+        max_H_ind = 0.5 * maximum(H0_func.(x_grid))  
         H_x_new = similar(H_x_old)
         for i in 1:M
-            H_x_new[i] = H_x_old[i] + τ * (E_y[i+1] - E_y[i]) / (4 * h)
+            H_x_new[i] = H_x_old[i] + τ * (E_y[i+1] - E_y[i]) / h
+            H_x_new[i] = clamp(H_x_new[i], -max_H_ind, max_H_ind)
         end
         j_new = zeros(M+1)
-        compute_current(j_new, H_x_new, h)
+        compute_current(j_new, H_x_new, H0_func, x_grid .+ h/2, h)
         return E_y, H_x_new, j_new
     end
 
@@ -200,7 +212,8 @@ export neutrals_evolution,
         n::Vector{Float64},
         T::Vector{Float64},
         vy::Vector{Float64},
-        n_a::Vector{Float64},
+        n_a_old::Vector{Float64},
+        n_a_new::Vector{Float64},
         α0::Float64,
         ζ::Float64,
         kI::Float64,
@@ -210,16 +223,16 @@ export neutrals_evolution,
         h::Float64,
         x_grid::AbstractVector{Float64},
         H0_func,
-        N_REG::Float64 = N_FLOOR,
-        νE::Float64 = 0.4 # Искусственная вязкость для размазывания поля
+        N_REG::Float64 = N_FLOOR
     )
         M = length(H_x_old)
         @assert length(Ez) == M + 1
         L = x_grid[end]
-        # Аппроксимация полусуммами
+        # Аппроксимация полусуммами (полуцелый временной слой)
         H_x_mid = (H_x_new + H_x_old) / 2
         j_mid = (j_new + j_old) / 2
-        # Интерполяция на целые узлы
+        n_a_half = (n_a_old + n_a_new) / 2   # n_a^{1/2} — полуцелый слой (формула 38)
+        # Интерполяция H на целые узлы
         H_interpolation = zeros(M+1)
         H_interpolation[1] = H_x_mid[1]
         for i in 2:M
@@ -234,19 +247,23 @@ export neutrals_evolution,
             # Центральная разность
             d_nT[i] = (n[i+1] * T[i+1] - n[i-1] * T[i-1]) / (2*h)
         end
-        d_nT[1] = d_nT[2]
-        d_nT[M+1] = d_nT[M]
+        d_nT[1] = (n[2]*T[2] - n[1]*T[1]) / h
+        d_nT[M+1] = (n[M+1]*T[M+1] - n[M]*T[M]) / h
 
         # Защита от деления на ноль
-        n_safe = max.(n, N_REG)
+        λe_λΣ = me / (1.0 + me)
         for i in 1:M+1
-            term1 = H_star[i] * vy[i]
-            term2 = (α0 / n_safe[i]) * H_star[i] * j_mid[i]
-            term3 = (ζ * α0 / n_safe[i]) * d_nT[i]
-            term4 = (kI / ε_dim) * n_a[i] * va
-            Ez[i] = term1 - term2 - term3 - term4
+            # Формула (38): E_z = H*^{1/2}*v_y*(λe/λΣ)*(kI/ε)*n_a^{1/2}*v_a
+            #                   - (α0/n)*H*^{1/2}*j^{1/2}
+            #                   - (ζ*α0/n)*∂(nT)/∂z
+            # ^{1/2} означает полуцелый временной слой, а не квадратный корень!
+            term_A = H_star[i] * vy[i]                           # ~ 0.1 * 0.5 = 0.05
+            term_B = λe_λΣ * (kI / ε_dim) * n_a_half[i] * va    # ~ 1e-3 * 0.01 * 10 * 0.05 = 2.5e-6
+            term_C = (α0 / n[i]) * H_star[i] * j_mid[i]    # ~ (1e-3/1) * 0.1 * 1 = 1e-4
+            term_D = (ζ * α0 / n[i]) * d_nT[i]  
+            Ez[i] = term_A - term_B - term_C - term_D
         end
-        
+
         return Ez
     end
 

@@ -22,7 +22,7 @@ function plot_results(snapshots, thrust_time, thrust_values, save_times, force_s
                       H_char=0.01172, H0_func=nothing)
     if !isempty(snapshots)
         # Масштабы перевода в СИ
-        E_char = mi * v_char^2 / (e_charge * L_phys)  # В/м
+        E_char = H_char * 8460.0
 
         times = sort(collect(keys(snapshots)))
         t_char_ms = t_char * 1000  # для меток времени: безразмерное → мс

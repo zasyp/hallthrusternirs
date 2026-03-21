@@ -115,10 +115,18 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
     t = 0.0
     step = 0
-
+    n_vy = zeros(M+1)
+    n_vz = zeros(M+1)
+    n_T  = zeros(M+1)
     while t < total_time
         # 1. Осаждение частиц на сетку (получение n_ion, v_iy, v_iz, T_e)
-        ParticleMovementSPT.deposit_particles(particles, x_grid, n_ion, v_iy, v_iz, T_e, h)
+        ParticleMovementSPT.deposit_particles(particles,x_grid,n_ion,v_iy,v_iz,T_e,n_vy,n_vz,n_T,h)
+        println("Step $step, t=$t, T_min=$(minimum(T_e)), T_max=$(maximum(T_e))")
+        # Сглаживание гидродинамических полей после осаждения (подавление шума PIC)
+        deposit_smooth_window = step < 50 ? 6 : 4
+        Steklov_smooth(n_ion, deposit_smooth_window, h, L, 4)
+        Steklov_smooth(v_iy,  deposit_smooth_window, h, L, 4)
+        Steklov_smooth(v_iz,  deposit_smooth_window, h, L, 4)
 
         # 2. Определение шага по времени с учётом условий Куранта
         max_vz = max(maximum(abs.(v_iz)), 1e-12)
@@ -130,7 +138,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         τ = min(h / v_a, 0.2 * h / max_vz, τ_coll, total_time - t)
 
         # 3. Вычисление тока из H на старом слое
-        compute_current(j, H_x_half, h)
+        compute_current(j, H_x_old, H0_func, x_grid .+ h/2, h)
 
         # 4. Промежуточная температура (первый этап, без переноса)
         T_tilde = similar(T_e)
@@ -158,17 +166,18 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         E_y, H_x_half, j = electric_field_solver(E_y, H_x_old, j_old, n_ion, v_iz, T_e,
                                                   τ, α, ν_m0, h, x_grid, H0_func, :j0)
 
-        # Минимальное сглаживание полей (Стеклов, 1 проход, окно 2 узла)
-        Steklov_smooth(E_y, 4, h, L, 10)
-        Steklov_smooth(H_x_half, 4, h, L, 10)
-        Steklov_smooth(j, 4, h, L, 10)
+        # Сглаживание полей
+        Steklov_smooth(E_y, 4, h, L, 15)
+        Steklov_smooth(H_x_half, 4, h, L, 15)
+        Steklov_smooth(j, 4, h, L, 15)
 
         # 9. Вычисление продольного поля E_z (явная формула)
-        compute_Ez(E_z, H_x_old, H_x_half, j_old, j, n_ion, T_e, v_iy, n_a_new,
+        compute_Ez(E_z, H_x_old, H_x_half, j_old, j, n_ion, T_e, v_iy,
+                   n_a_old, n_a_new,
                    α0, ζ, kI, ε_dim, v_a, me, h, x_grid, H0_func)
 
-        # Сглаживание E_z для подавления численных пиков (Стеклов, окно 3, 2 прохода)
-        Steklov_smooth(E_z, 3, h, L, 2)
+        # Сглаживание E_z для подавления численных пиков (Стеклов, окно 4, 8 проходов)
+        Steklov_smooth(E_z, 4, h, L, 8)
 
         # 10. Движение макрочастиц под действием полей
         counters = Counters(0, 0, 0, 0)
@@ -184,8 +193,9 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
         push!(thrust_time, t+τ)
         push!(thrust_values, thrust_step / τ)
+        Steklov_smooth(thrust_values, 4, h, L, 15)
         # 11. Добавление новых частиц от ионизации
-        new_particles_ionisation(particles, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h)
+        new_particles_ionisation(particles, n_a_old, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h)
 
         # 12. Удаление частиц, покинувших область или рекомбинировавших
         remove_inactive_particles(particles, L, τ, kR)
@@ -232,7 +242,7 @@ let
     n_char = 3.2837e17
     mi_phys = 1.391e-25
     (params, force_scale, L_phys, v_char) = params_from_physics(;
-        L_phys = 0.04,
+        L_phys = 0.01,
         v_char = 8461.7,
         n_char = n_char,
         H_char = 0.01172,
@@ -244,8 +254,8 @@ let
         v_a_ion = 0.040780141843971635 * 8461.7,
         n_a_left = 10.0,
         kR = 0.0,
-        M = 100,
-        N1 = 100,
+        M = 50,
+        N1 = 50,
         ε_dim = 1.0,
         H0_func = z -> begin
             # Колокольный профиль магнитного поля СПД-70 (безразмерный, z ∈ [0,1])
@@ -260,7 +270,7 @@ let
         kI_override = 0.16
     )
 
-    snapshots, thrust_time, thrust_values = Base.invokelatest(run_simulation, params, total_time=20.0, save_times=[10.0, 15.0, 16.0, 20.0], do_plot=false)
+    snapshots, thrust_time, thrust_values = Base.invokelatest(run_simulation, params, total_time=100.0, save_times=[50.0, 75.0, 100.0], do_plot=false)
 
     # Преобразование в размерные единицы (СИ)
     t_char = L_phys / v_char
@@ -279,7 +289,20 @@ let
     println("Средняя тяга (после начальных переходных): $(mean(thrust_values_mN[100:end])) мН")
     println("Средняя тяга (вторая половина): $(mean(thrust_values_mN[Int(length(thrust_values_mN)÷2):end])) мН")
 
-    plot_results(snapshots, thrust_time_ms, thrust_values_mN, [40.0, 50.0, 60.0, 100.0], force_scale;
+    plot_results(snapshots, thrust_time_ms, thrust_values_mN, [25.0, 27.0, 30.0], force_scale;
                  L_phys=L_phys, v_char=v_char, n_char=n_char, t_char=t_char, mi=mi_phys,
                  H_char=0.01172, H0_func=params.H0_func)
+
+    println("\n=== СНИМКИ СОСТОЯНИЯ ПЛАЗМЫ ===")
+    for st in sort(collect(keys(snapshots)))
+        x, n_a, n_i, v_iz, E_z, H_tot = snapshots[st]
+        t_μs = st * t_char * 1e6
+        println("\n--- t = $st (безр.) = $(round(t_μs, digits=3)) µs ---")
+        @printf("  %4s  %8s  %10s  %10s  %10s  %10s  %10s\n",
+                "k", "x [mm]", "n_a", "n_ion", "v_iz", "E_z", "H_total")
+        for i in eachindex(x)
+            @printf("  %4d  %8.3f  %10.4e  %10.4e  %10.4e  %10.4e  %10.4e\n",
+                    i-1, x[i]*L_phys*1000, n_a[i], n_i[i], v_iz[i], E_z[i], H_tot[i])
+        end
+    end
 end

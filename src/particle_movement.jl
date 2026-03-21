@@ -19,46 +19,52 @@ export deposit_particles, move_particles, new_particles_ionisation, remove_inact
         v_y::Vector{Float64},
         v_z::Vector{Float64},
         T::Vector{Float64},
+        n_vy::Vector{Float64},
+        n_vz::Vector{Float64},
+        n_T::Vector{Float64},
         h::Float64
     )
-        M = length(x_grid) - 1
-        fill!(n, 0.0)
-        n_vz = zeros(length(n))
-        n_vy = zeros(length(n))
-        n_T = zeros(length(n))
+
+        fill!(n,0.0)
+        fill!(n_vy,0.0)
+        fill!(n_vz,0.0)
+        fill!(n_T,0.0)
 
         for p in particles
             p.active || continue
 
-            k0, k1, w0, w1 = interpolation_weights(p.z, x_grid)
-            n[k0] += p.q * w0
-            n[k1] += p.q * w1
+            k0,k1,w0,w1 = interpolation_weights(p.z,x_grid)
 
-            n_vy[k0] += p.q * w0 * p.vy
-            n_vy[k1] += p.q * w1 * p.vy
+            n[k0] += p.q*w0
+            n[k1] += p.q*w1
 
-            n_vz[k0] += p.q * w0 * p.vz
-            n_vz[k1] += p.q * w1 * p.vz
+            n_vy[k0] += p.q*w0*p.vy
+            n_vy[k1] += p.q*w1*p.vy
 
-            n_T[k0] += p.q * w0 * p.T
-            n_T[k1] += p.q * w1 * p.T
+            n_vz[k0] += p.q*w0*p.vz
+            n_vz[k1] += p.q*w1*p.vz
+
+            n_T[k0] += p.q*w0*p.T
+            n_T[k1] += p.q*w1*p.T
         end
-        # Нормировка
+
         for i in eachindex(n)
-            vol = (i == 1 || i == length(n)) ? h/2 : h
+
+            vol = (i==1 || i==length(n)) ? h/2 : h
+
             if n[i] > N_FLOOR
-                v_y[i] = n_vy[i] / n[i]
-                v_z[i] = n_vz[i] / n[i]
-                T[i] = n_T[i] / n[i]
+                v_y[i] = n_vy[i]/n[i]
+                v_z[i] = n_vz[i]/n[i]
+                T[i]   = n_T[i]/n[i]
             else
                 v_y[i] = 0.0
                 v_z[i] = 0.0
-                T[i] = T_FLOOR
+                T[i]   = T_FLOOR
             end
-        
+
             n[i] /= vol
         end
-        return n, v_y, v_z, T
+
     end
 
     function move_particles(
@@ -89,58 +95,67 @@ export deposit_particles, move_particles, new_particles_ionisation, remove_inact
             z = p.z
             vy = p.vy
             vz = p.vz
-            v_abs = sqrt(vy^2 + vz^2)            
+            v_abs = sqrt(vy^2 + vz^2)
             N0 = max(1, ceil(Int, τ * v_abs / (0.25 * h)))
-            # частица за один подшаг не может переместиться больше, чем на долю размера ячейки
             τ0 = τ / N0
-            for i in 1:N0
-                if z < x_grid[1]
-                    z = x_grid[1]
-                    vz = abs(vz)
-                elseif z > x_grid[end]
-                    z = x_grid[end]
-                end
-                t_mid_relative = (i - 0.5) / N0   # исправлено имя переменной
-                # Целые узлы
-                k0, k1, w0, w1 = interpolation_weights(z, x_grid)  # исправлено имя функции
-                function interpolate_field(
-                    F0::Vector{Float64},
-                    F1::Vector{Float64}
-                )
-                    val_now = w0 * F0[k0] + w1 * F0[k1]
-                    val_next = w0 * F1[k0] + w1 * F1[k1]
-                    return (1 - t_mid_relative) * val_now + t_mid_relative * val_next
-                end
-                E_y_mid = interpolate_field(E_y0, E_y1)
-                E_z_mid = interpolate_field(E_z0, E_z1)
-                j_mid = interpolate_field(j0, j1)
-                ν_m_mid = interpolate_field(ν_m0_grid0, ν_m0_grid1)
 
-                # Полуцелые узлы
-                if z <= x_half[1]
-                    kh, wh = 1, 1.0 # kh - номер левого узла, wh - относительное расстояние от узла до частицы (вес правого узла, вес левого = 1 - wh)
-                elseif z >= x_half[end]
+            # Начальный полушаг по z (лягушачий прыжок — формула препринта)
+            z_half = z + τ0/2 * vz
+
+            for i in 1:N0
+                # Граничные условия на полупозиции z_half
+                if z_half <= x_grid[1]
+                    # Левая граница — вход в зону ускорения (со стороны зоны ионизации).
+                    # Ион, вернувшийся к z=0, покидает расчётную область — поглощение.
+                    counters.reflected_left += 1
+                    p.active = false
+                    break
+                elseif z_half >= L
+                    thrust_step += p.q * vz
+                    counters.exited_right += 1
+                    p.active = false
+                    break
+                end
+
+                # Временна́я доля: t_{n+1/2}/τ = (i-0.5)/N0 (формула 40)
+                t_rel = (i - 0.5) / N0
+
+                # Интерполяция полей в z_half (целые узлы)
+                k0, k1, w0, w1 = interpolation_weights(z_half, x_grid)
+
+                # Формула (40): E_y, E_z, ν_m не зависят от t_{n+1/2}
+                E_y_val = w0 * E_y0[k0] + w1 * E_y0[k1]
+                E_z_val = w0 * E_z0[k0] + w1 * E_z0[k1]
+                j_val   = (1 - t_rel) * (w0 * j0[k0] + w1 * j0[k1]) +
+                           t_rel      * (w0 * j1[k0] + w1 * j1[k1])
+                ν_m_val = w0 * ν_m0_grid0[k0] + w1 * ν_m0_grid0[k1]
+
+                # Интерполяция H на полуцелых узлах с временно́й интерполяцией
+                if z_half <= x_half[1]
+                    kh, wh = 1, 1.0
+                elseif z_half >= x_half[end]
                     kh, wh = length(x_half), 1.0
                 else
-                    kh = floor(Int, (z - x_half[1]) / h) + 1
+                    kh = floor(Int, (z_half - x_half[1]) / h) + 1
                     kh = clamp(kh, 1, length(x_half)-1)
-                    wh = (z - x_half[kh]) / h
+                    wh = (z_half - x_half[kh]) / h
                 end
-                # Билинейная (по пространству и времени) интерполяция значений поля H
-                H_now = (kh < length(x_half)) ? (1-wh)*H_x0[kh] + wh*H_x0[kh+1] : H_x0[kh]   # исправлено: второй индекс kh+1
+                H_now  = (kh < length(x_half)) ? (1-wh)*H_x0[kh] + wh*H_x0[kh+1] : H_x0[kh]
                 H_next = (kh < length(x_half)) ? (1-wh)*H_x1[kh] + wh*H_x1[kh+1] : H_x1[kh]
-                H_mid = (1 - t_mid_relative) * H_now + t_mid_relative * H_next   # исправлено имя переменной
+                H_val  = (1 - t_rel) * H_now + t_rel * H_next
+                H_star_val = H_val + H0_func(z_half)
 
-                H_star_mid = H_mid + H0_func(z)
-                
-                #Расчет скоростей по схеме предиктор-корректор
-                vy_pred = vy + 0.5 * τ0 * ε * (E_y_mid + H_star_mid * vz - ν_m_mid * j_mid)
-                vz_pred = vz + 0.5 * τ0 * ε * (E_z_mid - H_star_mid * vy)
+                # Схема Кранка-Николсона для уравнений (39):
+                # dvy/dt = ε*(E_z - H_*·vz)
+                # dvz/dt = ε*(E_y + H_*·vy - ν_m·j)
+                # Неявная схема: v^{n+1} = (I - α·A)^{-1}·(I + α·A)·v^n + τ0·(I - α·A)^{-1}·D
+                # где α = τ0·ε·H*/2, A = [[0,-H*];[H*,0]], D = ε·[E_z; E_y - ν_m·j]
+                α = τ0 * ε * H_star_val / 2
+                det_val  = 1.0 + α^2
+                E_y_eff  = E_y_val - ν_m_val * j_val   # E_y - ν_m·j
+                vy_new = ((1.0 - α^2)*vy - 2*α*vz + τ0*ε*(E_z_val - α*E_y_eff)) / det_val
+                vz_new = (2*α*vy + (1.0 - α^2)*vz + τ0*ε*(α*E_z_val + E_y_eff)) / det_val
 
-                vy_new = vy + τ0 * ε * (E_y_mid + H_star_mid * vz_pred - ν_m_mid * j_mid)
-                vz_new = vz + τ0 * ε * (E_z_mid - H_star_mid * vy_pred)
-
-                # Проверка на некорректные значения
                 if !isfinite(vy_new) || !isfinite(vz_new)
                     counters.nan += 1
                     p.active = false
@@ -151,23 +166,31 @@ export deposit_particles, move_particles, new_particles_ionisation, remove_inact
                     p.active = false
                     break
                 end
-                # Обновление координаты (среднее арифметическое скоростей)
-                z_new = z + τ0 * (vz + vz_new) / 2
-                p.z = z_new
-                p.vy = vy_new
-                p.vz = vz_new
-            
-                z, vy, vz = z_new, vy_new, vz_new
+
+                vy = vy_new
+                vz = vz_new
+
+                # Лягушачий прыжок: z^{n+3/2} = z^{n+1/2} + τ0·v_z^{n+1}
+                if i < N0
+                    z_half = z_half + τ0 * vz
+                end
             end
-            # Обработка граничных условий
-            if p.z >= L
-                p.active = false
-                thrust_step += p.q * p.vz
-                counters.exited_right += 1
-            elseif p.z <= 0.0
-                p.z = -p.z
-                p.vz = -p.vz
-                counters.reflected_left += 1
+
+            # Финальный полушаг: z^{N0} = z^{N0-1/2} + τ0/2·v_z^{N0}
+            if p.active
+                p.z  = z_half + τ0/2 * vz
+                p.vy = vy
+                p.vz = vz
+                # Проверка границ после финального шага
+                if p.z >= L
+                    thrust_step += p.q * p.vz
+                    counters.exited_right += 1
+                    p.active = false
+                elseif p.z <= 0.0
+                    # Ион вернулся к z=0 — поглощается зоной ионизации
+                    counters.reflected_left += 1
+                    p.active = false
+                end
             end
         end
         
@@ -177,28 +200,27 @@ export deposit_particles, move_particles, new_particles_ionisation, remove_inact
     # Появление новых ионов
     function new_particles_ionisation(
         particles::Vector{Particle},
+        n_a_old::Vector{Float64},
         n_a_new::Vector{Float64},
         n_ion::Vector{Float64},
         x_grid::AbstractVector{Float64},
         τ::Float64,
         kI::Float64,
-        v_a::Float64,           # исправлено: число, не вектор
-        T_ion::Float64,         # исправлено: число, не вектор
+        v_a::Float64,
+        T_ion::Float64,
         h::Float64,
-        ionisation_factor::Float64 = 1.0  # Плавное включение ионизации (ДОБАВЛЕНО)
+        ionisation_factor::Float64 = 1.0
     )
         for i in 1:length(x_grid)-1   # исключаем выходной узел (z=L): ионы там сразу вылетают
-            # Полное число частиц рождающихся в ячейке за временной шаг
-            # Умножаем на ionisation_factor для плавного включения в начале
-            q_new = ionisation_factor * kI * n_a_new[i] * n_ion[i] * τ * h
-            q_new = min(q_new, n_a_new[i] * h) # Их не должно быть больше, чем нейтралов в этой ячейке
+            # Полуцелое среднее n_a^{1/2} = (n_a^0 + n_a^1)/2 согласно формуле шага 13 препринта
+            n_a_half = (n_a_old[i] + n_a_new[i]) / 2
+            q_new = ionisation_factor * kI * n_a_half * n_ion[i] * τ * h
+            q_new = min(q_new, n_a_half * h)
             if q_new < MIN_PARTICLE_MASS
                 continue
             end
-            # Высадка частицы в случайном месте в ячейке
-            z = x_grid[i] + h * (rand() - 0.5)   # исправлено: x_grid[i]
-            z = clamp(z, x_grid[1], x_grid[end])
-            # Добавление частицы в массив частиц
+            # Позиция точно в узле сетки z_s = (s-1)*h (согласно §3, шаг 13)
+            z = x_grid[i]
             push!(particles, Particle(z, 0.0, v_a, T_ion, q_new, true))
         end
     end
