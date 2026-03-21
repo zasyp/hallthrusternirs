@@ -12,7 +12,7 @@ export neutrals_evolution,
 
     const N_FLOOR = 1e-8
     const T_FLOOR = 1e-6
-    const N_REG = 1e-4  # Регуляризация для защиты от деления на ноль в E_z
+    const SMOOTHING_PASSES = 2
 
     """
     Уравнения для концентраций и первый шаг расчета энергии
@@ -209,7 +209,9 @@ export neutrals_evolution,
         me::Float64,
         h::Float64,
         x_grid::AbstractVector{Float64},
-        H0_func
+        H0_func,
+        N_REG::Float64 = N_FLOOR,
+        νE::Float64 = 0.25 # Искуственная вязкость для размазывания поля
     )
         M = length(H_x_old)
         @assert length(Ez) == M + 1
@@ -250,6 +252,14 @@ export neutrals_evolution,
             term3 = (ζ * α0 / n_safe[i]) * d_nT[i]
             term4 = (kI / ε_dim) * n_a[i] * va
             Ez[i] = term1 - term2 - term3 - term4
+        end
+        # Дополнительное искуственное диффузное сглаживание
+        for _ in 1:SMOOTHING_PASSES
+            Ez_smooth = copy(Ez)
+            for i in 2:M
+                Ez_smooth[i] = Ez[i] + νE * (Ez[i+1] - 2Ez[i] + Ez[i-1])
+            end
+            Ez .= Ez_smooth
         end
         return Ez
     end

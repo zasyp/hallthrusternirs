@@ -157,6 +157,11 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         E_y, H_x_half, j = electric_field_solver(E_y, H_x_old, j_old, n_ion, v_iz, T_e,
                                                   τ, α, ν_m0, h, x_grid, H0_func, :j0)
 
+        # Минимальное сглаживание полей (Стеклов, 1 проход, окно 2 узла)
+        Steklov_smooth(E_y, 2, h, L, 1)
+        Steklov_smooth(H_x_half, 2, h, L, 1)
+        Steklov_smooth(j, 2, h, L, 1)
+
         # 9. Вычисление продольного поля E_z (явная формула)
         compute_Ez(E_z, H_x_old, H_x_half, j_old, j, n_ion, T_e, v_iy, n_a_new,
                    α0, ζ, kI, ε_dim, v_a, me, h, x_grid, H0_func)
@@ -179,8 +184,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         push!(thrust_values, thrust_step / τ)
 
         # 11. Добавление новых частиц от ионизации
-        ionisation_ramp = min(1.0, step / 50)  # Плавное включение за первые 50 шагов
-        new_particles_ionisation(particles, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h, ionisation_ramp)
+        new_particles_ionisation(particles, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h)
 
         # 12. Удаление частиц, покинувших область или рекомбинировавших
         remove_inactive_particles(particles, L, τ, kR)
