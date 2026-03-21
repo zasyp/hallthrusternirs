@@ -146,6 +146,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         # 6. Обновление концентрации нейтралов
         n_a_new = similar(n_a_old)
         n_a_new = neutrals_evolution(n_a_new, n_a_old, n_ion, τ, v_a, kI, h, n_a_left)
+        Steklov_smooth(n_a_new, 8, h, L, 4)
 
         # 7. Сохранение старых полей для временной интерполяции
         copyto!(H_x_old, H_x_half)
@@ -158,16 +159,17 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
                                                   τ, α, ν_m0, h, x_grid, H0_func, :j0)
 
         # Минимальное сглаживание полей (Стеклов, 1 проход, окно 2 узла)
-        Steklov_smooth(E_y, 2, h, L, 1)
-        Steklov_smooth(H_x_half, 2, h, L, 1)
-        Steklov_smooth(j, 2, h, L, 1)
+        Steklov_smooth(E_y, 4, h, L, 10)
+        Steklov_smooth(H_x_half, 4, h, L, 10)
+        Steklov_smooth(j, 4, h, L, 10)
 
         # 9. Вычисление продольного поля E_z (явная формула)
         compute_Ez(E_z, H_x_old, H_x_half, j_old, j, n_ion, T_e, v_iy, n_a_new,
                    α0, ζ, kI, ε_dim, v_a, me, h, x_grid, H0_func)
 
         # Сглаживание E_z (только внутренняя диффузия в compute_Ez, без дополнительного)
-
+        Steklov_smooth(E_z, 4, h, L, 10)
+        
         # 10. Движение макрочастиц под действием полей
         counters = Counters(0, 0, 0, 0)
         ν_m_grid = ν_m0 ./ max.(T_e, PlasmaDynamics.T_FLOOR).^(3/2)   # частота столкновений на новом слое
@@ -182,7 +184,6 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
         push!(thrust_time, t+τ)
         push!(thrust_values, thrust_step / τ)
-
         # 11. Добавление новых частиц от ионизации
         new_particles_ionisation(particles, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h)
 
@@ -243,8 +244,8 @@ let
         v_a_ion = 0.040780141843971635 * 8461.7,
         n_a_left = 10.0,
         kR = 0.0,
-        M = 200,
-        N1 = 200,
+        M = 100,
+        N1 = 100,
         ε_dim = 1.0,
         H0_func = z -> begin
             # Колокольный профиль магнитного поля СПД-70 (безразмерный, z ∈ [0,1])
