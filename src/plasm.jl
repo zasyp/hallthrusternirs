@@ -12,7 +12,7 @@ export neutrals_evolution,
 
     const N_FLOOR = 1e-8
     const T_FLOOR = 1e-6
-    const SMOOTHING_PASSES = 2
+    const SMOOTHING_PASSES = 5
 
     """
     Уравнения для концентраций и первый шаг расчета энергии
@@ -211,7 +211,7 @@ export neutrals_evolution,
         x_grid::AbstractVector{Float64},
         H0_func,
         N_REG::Float64 = N_FLOOR,
-        νE::Float64 = 0.25 # Искуственная вязкость для размазывания поля
+        νE::Float64 = 0.4 # Искусственная вязкость для размазывания поля
     )
         M = length(H_x_old)
         @assert length(Ez) == M + 1
