@@ -12,7 +12,7 @@ export neutrals_evolution,
 
     const N_FLOOR = 1e-8
     const T_FLOOR = 1e-6
-    const SMOOTHING_PASSES = 3
+    const N_REG = 1e-4  # Регуляризация для защиты от деления на ноль в E_z
 
     """
     Уравнения для концентраций и первый шаг расчета энергии
@@ -39,9 +39,11 @@ export neutrals_evolution,
             n_a_new[i] = (n_a_old[i] + convection) / (1.0 + τ * kI * n_ion[i])
             n_a_new[i] = max(n_a_new[i], 0.0)
         end
+        return n_a_new
     end
 
     # Первый шаг вычисления температуры (джоулев нагрев, ионизация, и расширение/сжатие электронной жидкости)
+    # Соответствует уравнению энергии электронов в безразмерной модели
     function intermidiate_temperature(
         T_new::Vector{Float64},
         T_old::Vector{Float64},
@@ -55,15 +57,20 @@ export neutrals_evolution,
         me::Float64,
         ν_m0::Float64,
         kI::Float64,
-        h::Float64
+        h::Float64,
+        ζ::Float64
     )
         M = length(T_old) - 1
         for i in 2:M
             ν_m = ν_m0 / max(T_old[i], T_FLOOR) ^ (3/2)
             dvz = (vz[i+1] - vz[i-1]) / (2*h)
-            Q_collision = (γ - 1) * (mi / (mi + me)) * ν_m * j[i] ^ 2 / max(n[i], N_FLOOR)
-            Q_ionisation = (γ - 1) * kI * n_a[i] * T_old[i]
-            T_new[i] = max(T_old[i] + τ * (Q_collision - Q_ionisation - (γ - 1) * T_old[i] * dvz),
+            # Джоулев нагрев: (γ-1)*m_i/m_Σ*ν_m/ζ*j_y²/n
+            # Согласно модели требуется деление на ζ (безразмерный параметр)
+            Q_collision = (γ - 1) * (mi / (mi + me)) * (ν_m / ζ) * j[i] ^ 2 / max(n[i], N_FLOOR)
+            # Ионизационный нагрев: (γ-1)*k_l*T_e*n_a
+            # Согласно модели требуется T_e (старое значение температуры), а не n
+            Q_ionisation = (γ - 1) * kI * T_old[i] * n_a[i]
+            T_new[i] = max(T_old[i] + τ * (Q_collision + Q_ionisation - (γ - 1) * T_old[i] * dvz),
                            T_FLOOR)
         end
         T_new[1] = T_new[2]
@@ -118,7 +125,7 @@ export neutrals_evolution,
             H_interpolated[i] = (H_x_old[i-1] + H_x_old[i]) / 2  # Интерполируем значения в целых узлах как среднее из соседних полуцелых
         end
         H_interpolated[M+1] = H_x_old[M]    # Берем просто значение из последнего полуцелого узла
-        H_star = H_interpolated .+ H0_func(x_grid)   # Добавляем внешнее поле
+        H_star = H_interpolated .+ [H0_func(z) for z in x_grid]   # Добавляем внешнее поле
         a = zeros(M+1)
         b = zeros(M+1)
         c = zeros(M+1)
@@ -202,9 +209,7 @@ export neutrals_evolution,
         me::Float64,
         h::Float64,
         x_grid::AbstractVector{Float64},
-        H0_func,
-        N_REG::Float64 = N_FLOOR,
-        νE::Float64 = 0.15 # Искуственная вязкость для размазывания поля
+        H0_func
     )
         M = length(H_x_old)
         @assert length(Ez) == M + 1
@@ -219,38 +224,32 @@ export neutrals_evolution,
             H_interpolation[i] = (H_x_mid[i] + H_x_mid[i-1]) / 2
         end
         H_interpolation[M+1] = H_x_mid[M]
-        H_star = H_interpolation + H0_func.(x_grid)
-        # Сглаживание для производной
-        n_s = copy(n)
-        T_s = copy(T)
-        Steklov_smooth(n_s, 2, h, L)
-        Steklov_smooth(T_s, 2, h, L)
-        
-        # Вычисление производной δnT/δz
+        H_star = H_interpolation + [H0_func(z) for z in x_grid]
+
+        # Вычисление производной δnT/δz с минимальным усреднением для подавления шума
         d_nT = zeros(M+1)
         for i in 2:M
-            d_nT[i] = (n_s[i+1] * T_s[i+1] - n_s[i-1] * T_s[i-1]) / (2*h)
+            # Центральная разность
+            d_nT[i] = (n[i+1] * T[i+1] - n[i-1] * T[i-1]) / (2*h)
         end
         d_nT[1] = d_nT[2]
         d_nT[M+1] = d_nT[M]
 
+        # Минимальное сглаживание производной ( 1 проход, окно 2) для подавления шума от дискретизации
+        d_nT_smooth = copy(d_nT)
+        for i in 2:M
+            d_nT_smooth[i] = (d_nT[i-1] + 2*d_nT[i] + d_nT[i+1]) / 4
+        end
+        d_nT = d_nT_smooth
+
         # Защита от деления на ноль
         n_safe = max.(n, N_REG)
-
         for i in 1:M+1
             term1 = H_star[i] * vy[i]
             term2 = (α0 / n_safe[i]) * H_star[i] * j_mid[i]
             term3 = (ζ * α0 / n_safe[i]) * d_nT[i]
-            term4 = me * (kI / ε_dim) * n_a[i] * va
+            term4 = (kI / ε_dim) * n_a[i] * va
             Ez[i] = term1 - term2 - term3 - term4
-        end
-        # Дополнительное искуственное диффузное сглаживание
-        for _ in 1:SMOOTHING_PASSES
-            Ez_smooth = copy(Ez)
-            for i in 2:M
-                Ez_smooth[i] = Ez[i] + νE * (Ez[i+1] - 2Ez[i] + Ez[i-1])
-            end
-            Ez .= Ez_smooth
         end
         return Ez
     end
