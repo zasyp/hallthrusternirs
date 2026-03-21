@@ -149,11 +149,11 @@ export neutrals_evolution,
         # Костыль, но просто символьно определяю тип ГУ 
         # (в данном случае говорю что азимутальные токи на границах равны нулю)
         if bc_type == :j0
-            # Левая граница
-            dj_left = j_old[2] / h
+            # Левая граница: центральная разность с фиктивным узлом j[0]=0 (совместимо с j[1]=0)
+            dj_left = j_old[2] / (2h)
             E_y[1] = (-H_star[1] + (α / max(n[1], N_FLOOR)) * dj_left) * vz[1]
-            # Правая граница
-            dj_right = -j_old[M] / h
+            # Правая граница: центральная разность с фиктивным узлом j[M+2]=0 (совместимо с j[M+1]=0)
+            dj_right = -j_old[M] / (2h)
             E_y[M+1] = (-H_star[M+1] + (α / max(n[M+1], N_FLOOR)) * dj_right) * vz[M+1]
             if M - 1 > 0
                 d[2] -= a[2] * E_y[1]
@@ -183,7 +183,7 @@ export neutrals_evolution,
         # Обновление Hx по формуле (37) (закон Фарадея)
         H_x_new = similar(H_x_old)
         for i in 1:M
-            H_x_new[i] = H_x_old[i] + τ * (E_y[i+1] - E_y[i]) / h
+            H_x_new[i] = H_x_old[i] + τ * (E_y[i+1] - E_y[i]) / (4 * h)
         end
         j_new = zeros(M+1)
         compute_current(j_new, H_x_new, h)
@@ -237,13 +237,6 @@ export neutrals_evolution,
         d_nT[1] = d_nT[2]
         d_nT[M+1] = d_nT[M]
 
-        # Минимальное сглаживание производной ( 1 проход, окно 2) для подавления шума от дискретизации
-        d_nT_smooth = copy(d_nT)
-        for i in 2:M
-            d_nT_smooth[i] = (d_nT[i-1] + 2*d_nT[i] + d_nT[i+1]) / 4
-        end
-        d_nT = d_nT_smooth
-
         # Защита от деления на ноль
         n_safe = max.(n, N_REG)
         for i in 1:M+1
@@ -253,14 +246,7 @@ export neutrals_evolution,
             term4 = (kI / ε_dim) * n_a[i] * va
             Ez[i] = term1 - term2 - term3 - term4
         end
-        # Дополнительное искуственное диффузное сглаживание
-        for _ in 1:SMOOTHING_PASSES
-            Ez_smooth = copy(Ez)
-            for i in 2:M
-                Ez_smooth[i] = Ez[i] + νE * (Ez[i+1] - 2Ez[i] + Ez[i-1])
-            end
-            Ez .= Ez_smooth
-        end
+        
         return Ez
     end
 
