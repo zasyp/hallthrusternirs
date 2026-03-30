@@ -29,6 +29,7 @@ struct SimParams
     n_a_left::Float64
     kI::Float64
     kR::Float64
+    kCEX::Float64
     γ::Float64
     ε::Float64
     ν_m0::Float64
@@ -40,9 +41,9 @@ struct SimParams
     N1::Int
 end
 
-function SimParams(; L, M, mi, me, T_ion, v_a, n_a_left, kI, kR, γ, ε, ν_m0, α, α0, ζ, ε_dim, H0_func, N1)
+function SimParams(; L, M, mi, me, T_ion, v_a, n_a_left, kI, kR, kCEX=0.0, γ, ε, ν_m0, α, α0, ζ, ε_dim, H0_func, N1)
     h = L / M
-    return SimParams(L, M, h, mi, me, T_ion, v_a, n_a_left, kI, kR, γ, ε, ν_m0, α, α0, ζ, ε_dim, H0_func, N1)
+    return SimParams(L, M, h, mi, me, T_ion, v_a, n_a_left, kI, kR, kCEX, γ, ε, ν_m0, α, α0, ζ, ε_dim, H0_func, N1)
 end
 
 end

@@ -55,6 +55,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
     n_a_left = params.n_a_left
     kI = params.kI
     kR = params.kR
+    kCEX = params.kCEX
     γ = params.γ
     ε = params.ε
     ν_m0 = params.ν_m0
@@ -74,7 +75,11 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
     # Амплитуда скорости выбирается из максвеллиана: v_rms = sqrt(3*T_ion)
     particles::Vector{PartCount.Particle} = []
     q0 = L / (N1 * M)                       # вес одной макрочастицы
-    v_amplitude = sqrt(3 * T_ion)           # правильная тепловая скорость (v_rms ≈ 1.73 для T_ion=1.0)
+    # Начальная амплитуда скорости ~ v_a: ионы рождаются из медленных нейтралов.
+    # T_ion=1 (безразм.) >> v_a^2/3, поэтому sqrt(3*T_ion)≈1.73 v 43× больше v_a≈0.04
+    # и начальные частицы вылетали за ~0.6 безразм. времени до того, как ионизация
+    # успевала их восполнить. Используем v_a в качестве характерной скорости.
+    v_amplitude = v_a
     for k in 1:M
         z0 = x_grid[k] + h/2                 # центр ячейки
         for s in 1:N1
@@ -124,15 +129,15 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         println("Step $step, t=$t, T_min=$(minimum(T_e)), T_max=$(maximum(T_e))")
         # Сглаживание гидродинамических полей после осаждения (подавление шума PIC)
         deposit_smooth_window = step < 50 ? 6 : 4
-        Steklov_smooth(n_ion, deposit_smooth_window, h, L, 4)
-        Steklov_smooth(v_iy,  deposit_smooth_window, h, L, 4)
-        Steklov_smooth(v_iz,  deposit_smooth_window, h, L, 4)
+        Steklov_smooth(n_ion, deposit_smooth_window, h, L, 2)
+        Steklov_smooth(v_iy,  deposit_smooth_window, h, L, 2)
+        Steklov_smooth(v_iz,  deposit_smooth_window, h, L, 2)
 
         # 2. Определение шага по времени с учётом условий Куранта
         max_vz = max(maximum(abs.(v_iz)), 1e-12)
         # Для τ_coll используем физически разумный минимум T: 0.01 безразм. ≈ 0.14 эВ при T_char=14 эВ,
         # чтобы избежать заморозки шага при T→T_FLOOR=1e-6
-        T_min_dt = max(minimum(T_e), 0.01)
+        T_min_dt = max(minimum(T_e), 0.1)
         ν_m_max  = ν_m0 / T_min_dt ^ (3/2)
         τ_coll   = 0.5 / ν_m_max
         τ = min(h / v_a, 0.2 * h / max_vz, τ_coll, total_time - t)
@@ -154,7 +159,7 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         # 6. Обновление концентрации нейтралов
         n_a_new = similar(n_a_old)
         n_a_new = neutrals_evolution(n_a_new, n_a_old, n_ion, τ, v_a, kI, h, n_a_left)
-        Steklov_smooth(n_a_new, 8, h, L, 4)
+        Steklov_smooth(n_a_new, 2, h, L, 2)
 
         # 7. Сохранение старых полей для временной интерполяции
         copyto!(H_x_old, H_x_half)
@@ -193,12 +198,16 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
 
         push!(thrust_time, t+τ)
         push!(thrust_values, thrust_step / τ)
-        Steklov_smooth(thrust_values, 4, h, L, 15)
+
+        # 10.5. Перезарядка (CEX): быстрые ионы обмениваются зарядом с нейтралами
+        cex_count = (kCEX > 0.0) ? apply_cex!(particles, n_a_new, v_a, kCEX, τ, x_grid) : 0
+
         # 11. Добавление новых частиц от ионизации
         new_particles_ionisation(particles, n_a_old, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion, h)
 
         # 12. Удаление частиц, покинувших область или рекомбинировавших
         remove_inactive_particles(particles, L, τ, kR)
+        length(particles) > 50_000 && @warn "Число частиц превысило 50000 (шаг $step): возможна утечка частиц"
 
         # 13. Сохранение снимков в заданные моменты времени
         for st in save_times
@@ -223,7 +232,8 @@ function run_simulation(params::SimParams; total_time=30.0, save_times=[10.0,20.
         println("Step $step, t=$t, #particles=$(length(particles)), ",
                 "min_n=$(minimum(n_ion)), max_Ez=$(maximum(abs.(E_z))), ",
                 "nan=$(counters.nan), overspeed=$(counters.overspeed), ",
-                "exited=$(counters.exited_right), reflected=$(counters.reflected_left)")
+                "exited=$(counters.exited_right), reflected=$(counters.reflected_left), ",
+                "cex=$cex_count")
     end
 
     # Построение графиков по окончании расчёта

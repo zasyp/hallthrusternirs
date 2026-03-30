@@ -9,7 +9,7 @@ const MIN_PARTICLE_MASS = 1e-8
 const N_FLOOR = 1e-8          # добавлено, если не определено глобально
 const T_FLOOR = 1e-6
 
-export deposit_particles, move_particles, new_particles_ionisation, remove_inactive_particles
+export deposit_particles, move_particles, new_particles_ionisation, remove_inactive_particles, apply_cex!
 
     # осаждение частиц на сетку
     function deposit_particles(
@@ -214,7 +214,9 @@ export deposit_particles, move_particles, new_particles_ionisation, remove_inact
         for i in 1:length(x_grid)-1   # исключаем выходной узел (z=L): ионы там сразу вылетают
             # Полуцелое среднее n_a^{1/2} = (n_a^0 + n_a^1)/2 согласно формуле шага 13 препринта
             n_a_half = (n_a_old[i] + n_a_new[i]) / 2
-            q_new = ionisation_factor * kI * n_a_half * n_ion[i] * τ * h
+            # Минимальный seed n_ion: катодные электроны всегда поставляют фоновую ионизацию
+            n_eff = max(n_ion[i], 1e-3 * n_a_half)
+            q_new = ionisation_factor * kI * n_a_half * n_eff * τ * h
             q_new = min(q_new, n_a_half * h)
             if q_new < MIN_PARTICLE_MASS
                 continue
@@ -237,11 +239,30 @@ export deposit_particles, move_particles, new_particles_ionisation, remove_inact
                 p.active = false
                 continue
             end
-            P_rec = min(1.0, kR * p.q * τ)
+            P_rec = kR * p.q * τ
             rand() < P_rec && (p.active = false)
         end
         filter!(p -> p.active, particles)
         return particles
+    end
+
+    function apply_cex!(particles, n_a_grid, v_a, kCEX, τ, x_grid)
+        cex_count = 0
+        for p in particles
+            !p.active && continue
+            # Линейная интерполяция n_a на позицию частицы (согласованно с deposit_particles)
+            k0, k1, w0, w1 = interpolation_weights(p.z, x_grid)
+            n_a_loc = w0 * n_a_grid[k0] + w1 * n_a_grid[k1]
+            # Вероятность CEX за шаг τ: P = 1 - exp(-kCEX * n_a * τ)
+            P_cex = 1 - exp(-kCEX * n_a_loc * τ)
+            if rand() < P_cex
+                # Быстрый ион превращается в медленный: принимает скорость нейтрала
+                p.vz = v_a
+                p.vy = 0.0
+                cex_count += 1
+            end
+        end
+        return cex_count
     end
 
 end

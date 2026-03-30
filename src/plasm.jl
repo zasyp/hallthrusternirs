@@ -253,14 +253,11 @@ export neutrals_evolution,
         # Защита от деления на ноль
         λe_λΣ = me / (1.0 + me)
         for i in 1:M+1
-            # Формула (38): E_z = H*^{1/2}*v_y*(λe/λΣ)*(kI/ε)*n_a^{1/2}*v_a
-            #                   - (α0/n)*H*^{1/2}*j^{1/2}
-            #                   - (ζ*α0/n)*∂(nT)/∂z
-            # ^{1/2} означает полуцелый временной слой, а не квадратный корень!
-            term_A = H_star[i] * vy[i]                           # ~ 0.1 * 0.5 = 0.05
-            term_B = λe_λΣ * (kI / ε_dim) * n_a_half[i] * va    # ~ 1e-3 * 0.01 * 10 * 0.05 = 2.5e-6
-            term_C = (α0 / n[i]) * H_star[i] * j_mid[i]    # ~ (1e-3/1) * 0.1 * 1 = 1e-4
-            term_D = (ζ * α0 / n[i]) * d_nT[i]  
+            n_eff = max(n[i], N_REG)
+            term_A = H_star[i] * vy[i]
+            term_B = λe_λΣ * (kI / ε_dim) * n_a_half[i] * va
+            term_C = (α0 / n_eff) * H_star[i] * j_mid[i]
+            term_D = (ζ * α0 / n_eff) * d_nT[i]
             Ez[i] = term_A - term_B - term_C - term_D
         end
 

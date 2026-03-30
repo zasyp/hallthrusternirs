@@ -64,7 +64,7 @@ end
 """
     params_from_physics(; L_phys, v_char, n_char, H_char, T_char, mi, me, β0, σ0_Spitzer,
                           v_a_ion, n_a_left, kR, M=100, N1=100, ε_dim=1.0, H0_func=z->1.0,
-                          ν_m0_override=nothing, kI_override=nothing)
+                          ν_m0_override=nothing, kI_override=nothing, kCEX_override=nothing)
 
 Вычисляет полный набор безразмерных параметров для SimParams из физических параметров СПД-70.
 Возвращает кортеж (sim_params, force_scale, L_phys, v_char) для преобразования размерностей.
@@ -87,7 +87,8 @@ function params_from_physics(;
     ε_dim::Float64 = 1.0,
     H0_func::Function = z -> 1.0,
     ν_m0_override::Union{Float64, Nothing} = nothing,
-    kI_override::Union{Float64, Nothing} = nothing
+    kI_override::Union{Float64, Nothing} = nothing,
+    kCEX_override::Union{Float64, Nothing} = nothing
 )
     dimens = dimensionless_params(;
         L_phys = L_phys,
@@ -112,6 +113,10 @@ function params_from_physics(;
     T_ion_nondim = 1.0
     v_a_nondim = v_a_ion / v_char
     kI = (kI_override !== nothing) ? kI_override : dimens.kI
+    # CEX: k_CEX = σ_CEX * v_char * n_char * t_char = σ_CEX * n_char * L_phys
+    # σ_CEX для Kr⁺ ≈ 3.5e-19 м² (типичное значение при ~1 кэВ)
+    kCEX_default = 3.5e-19 * n_char * L_phys
+    kCEX = (kCEX_override !== nothing) ? kCEX_override : kCEX_default
 
     sim_params = PartCount.SimParams(
         L = 1.0,
@@ -123,6 +128,7 @@ function params_from_physics(;
         n_a_left = n_a_left,
         kI = kI,
         kR = kR,
+        kCEX = kCEX,
         γ = 5.0 / 3.0,
         ε = dimens.ε,
         ν_m0 = ν_m0,
