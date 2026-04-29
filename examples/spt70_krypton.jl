@@ -7,14 +7,14 @@ const M_XE_KG = 2.18e-25
 const M_E_KG  = 9.1093837015e-31
 
 const L_M   = 0.040
-const B_MAX = 500.0e-4
+const B_MAX = 300.0e-4
 const N_M3  = 5.0e17
 const T_E_EV = 14.0
 const BETA0_M3S = 8.0e-13
 const T_ION_EV = 500.0 / 11600.0
 
 const H0_Z0    = 0.8
-const H0_SIGMA = 0.10
+const H0_SIGMA = 0.30
 const H0_OFFSET = 0.2
 
 scales_SI = PaperScales.alfven_reference_scales(;

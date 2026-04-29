@@ -508,8 +508,8 @@ function run_simulation(
             push!(particles, Particle(z0, vp * cos(φ), vp * sin(φ), T_ion, q0, true))
         end
     end
-    # Neutral profile (paper p.43): hyperbolic n_{a,0}(z) = 2 n_a/(2 + 1e^5 z).
-    n_a_old = @. 2 * n_a_left / (2 + 1e5 * x_grid)
+    # Initial neutral density profile: constant along the whole channel.
+    n_a_old = fill(n_a_left, M + 1)
     H_x_half = zeros(M)
     j = zeros(M + 1)
     E_y = zeros(M + 1)
