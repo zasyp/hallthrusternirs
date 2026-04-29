@@ -13,8 +13,8 @@ const T_E_EV = 14.0
 const BETA0_M3S = 8.0e-13
 const T_ION_EV = 500.0 / 11600.0
 
-const H0_Z0    = 0.75
-const H0_SIGMA = 0.20
+const H0_Z0    = 0.8
+const H0_SIGMA = 0.10
 const H0_OFFSET = 0.2
 
 scales_SI = PaperScales.alfven_reference_scales(;
