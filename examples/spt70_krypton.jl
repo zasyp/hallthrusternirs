@@ -6,7 +6,7 @@ const M_KR_KG = 1.39e-25
 const M_XE_KG = 2.18e-25
 const M_E_KG  = 9.1093837015e-31
 
-const L_M   = 0.040
+const L_M   = 0.010
 const B_MAX = 300.0e-4
 const N_M3  = 5.0e17
 const T_E_EV = 14.0
@@ -52,8 +52,13 @@ v_pic0_dimless = PaperScales.v_pic0_dimless_from_ion_thermal(scales_SI, T_ION_EV
 const ALPHA_B_ANOM = 0.0
 const N_A_LEFT_DIMLESS = 10.0
 
+# Grid / PIC sizing for SPT-70 / Krypton at the SI scales above.
+# - h_SI = L/M = 0.4 mm ≈ 8.5·λ_D (λ_D ≈ 47 μm at n=5e17, T_e=14 eV) — adequate for hybrid PIC.
+# - N1 = 50 initial macroparticles per cell (5000 total): ionization grows the count by 10-50×
+#   over one transit time, so additional initial seeding is wasted; moments are dominated by
+#   ionized particles after t ≈ 1 t_char.
 const M_GRID = 100
-const N1_MAC = 100
+const N1_MAC = 50
 
 params, groups = PaperScales.sim_params_from_si_scales(
     scales_SI,
@@ -88,23 +93,30 @@ println(
     "$(round(V_ION_BEAM_MS, digits=5)) m/s — compare to `v_iz` profile (sheath / partial Δφ not resolved).",
 )
 
-const T_END  = 100.0
+# Total simulation time in dimensionless units `[t] = L/v_A`.
+# - Ion transit time at U_discharge=250 V: t_transit ≈ L / sqrt(2eU/m_i) ≈ 1.7 μs ≈ 4.2 t_char.
+# - Steady state typically reached after 5-8 transit times → T_END ≈ 30 is sufficient and ~3× cheaper
+#   than T_END = 100 (no further physics is captured beyond the steady state).
+const T_END  = 30.0
 const FIGDIR = joinpath(ROOT, "output", "figures", "spt70_krypton")
 
 CoreSolver.run_simulation(
     params;
     mode = :case2,
-    accumulate_induced_H = true,
+    accumulate_induced_H = false,
     total_time = T_END,
-    save_times = [T_END*0.8, T_END*0.9, T_END],
+    # Snapshots from the last third of the run to inspect statistical steady state.
+    save_times = [T_END*0.7, T_END*0.85, T_END],
     do_plot = true,
     plot_output_dir = FIGDIR,
     si_plot_scales = scales_SI,
     plot_profiles_dimensionless = true,
     E0_dimless = E0_DIMLESS,
-    steklov_field_half_width = 20,
-    steklov_field_passes = 5,
-    steklov_field_boundary = :reflect,
+    # Adaptive timestep: keep the four physical CFLs; relax the explicit Hall-whistler safety to 2.0
+    # because the elliptic Ohm solve already treats the Hall part of the current semi-implicitly.
+    tau_constraints = :full,
+    tau_hall_safety = 2.0,
+    log_tau_constraint = true,
 )
 
 println("Figures: ", FIGDIR)

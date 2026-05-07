@@ -11,6 +11,20 @@ const THRUSTER_EFFECTIVE_AREA_M2 = 0.0025
 const e_stat = 4.80320425e-10
 const c_cgs = 2.99792458e10
 
+"""
+    CharacteristicScalesSI(L_m, v_ref_m_s, B_T, n_m3, T_K, m_i_kg, m_e_kg)
+
+Physical reference scales used to (de)dimensionalise the simulation:
+- `L_m` — channel length (also `[L]`),
+- `v_ref_m_s` — velocity scale (typically the Alfvén velocity `v_A = B/√(μ0 ρ)`),
+- `B_T` — magnetic-induction scale (peak external field),
+- `n_m3` — plasma-density scale,
+- `T_K` — electron-temperature scale,
+- `m_i_kg`, `m_e_kg` — ion and electron masses.
+
+The derived time scale is `t_char = L_m / v_ref_m_s` and the dimensionless groups
+(`ε`, `κ`, `ζ`, `ξ`, `k_I`, `ν_m0`) follow from `paper_dimensionless_from_si`.
+"""
 struct CharacteristicScalesSI
     L_m::Float64
     v_ref_m_s::Float64
@@ -28,6 +42,14 @@ function CharacteristicScalesSI(; L_m, v_ref_m_s, B_T, n_m3, T_K, m_i_kg, m_e_kg
     )
 end
 
+"""
+    xi_gaussian(L_m, n_m3, m_i_kg, m_e_kg) -> Float64
+
+Paper §2 closure parameter `ξ = c √(λ_i λ_e) / (L √(4π ρ))` evaluated in Gaussian units
+(`c` cm/s, `e` statC, `ρ = m_i n` g/cm³, `L` cm). Inputs come in SI, conversion is local
+to the function. `ξ` enters the Ohm-law coefficient `α = (m_i/m_Σ) ξ²` and the closure
+`α0 = κ ξ (m_i/m_Σ) √(m_i/m_e)`.
+"""
 function xi_gaussian(L_m::Float64, n_m3::Float64, m_i_kg::Float64, m_e_kg::Float64)
     L_cm = L_m * 100.0
     n_cc = n_m3 * 1e-6

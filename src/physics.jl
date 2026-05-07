@@ -2,6 +2,16 @@ module PartCount
 
 export Particle, Counters, SimParams
 
+"""
+    Particle(z, vy, vz, T, q, active)
+
+A single PIC macroparticle on a 1D-3V mesh:
+- `z` — axial position;
+- `vy`, `vz` — azimuthal and axial velocities;
+- `T` — local electron temperature interpolated to the particle (used for diagnostics);
+- `q` — macroparticle weight (sum equals total dimensionless charge / channel length);
+- `active` — soft kill flag (compacted by `remove_inactive_particles`).
+"""
 mutable struct Particle
     z::Float64
     vy::Float64
@@ -11,12 +21,52 @@ mutable struct Particle
     active::Bool
 end
 
+"""
+    Counters(nan, exited_right, reflected_left)
+
+Per-step diagnostic counters incremented inside `move_particles`:
+- `nan` — particles killed because the pusher produced a non-finite velocity;
+- `exited_right` — ions that crossed the anode plane (right boundary);
+- `reflected_left` — ions absorbed at the left wall (reinjected as neutrals through the
+  inlet boundary condition `n_a(0)` and the ionisation source).
+"""
 mutable struct Counters
     nan::Int
     exited_right::Int
     reflected_left::Int
 end
 
+"""
+    SimParams(; L, M, mi, me, T_ion, v_a, n_a_left, kI, kR, γ, ε, ν_m0,
+              α, α0, ζ, ε_dim, λ_e_λΣ, c_inv=1, H0_func, N1, v_pic0=1,
+              collision_model=:spitzer, alpha_B=0, E_z0_dimless=0,
+              pic_charge_factor=1, include_self_B=true)
+
+Dimensionless parameter container used by every solver routine. All variables are in the
+paper-§2 / §3 normalisation (`[L]=L_m`, `[v]=v_ref`, `[t]=L/v`, etc.):
+
+- `L, M, h = L/M` — channel length, cells, cell width.
+- `mi, me` — ion / electron masses (typically `mi=1`, `me=m_e/m_i`).
+- `T_ion`, `v_a`, `n_a_left` — initial neutral temperature, axial neutral speed, inlet density.
+- `kI`, `kR` — dimensionless ionisation / recombination Damköhler numbers
+  (`kI = β₀ n L / v`, `kR = ν_R L / v`).
+- `γ` — adiabatic index used in `intermediate_temperature`.
+- `ε` — dimensionless time scale `ω_ci · t_char` (paper Eq. (11)).
+- `ν_m0` — Spitzer prefactor, `ν_m = ν_m0 / T^{3/2}` (or constant if `collision_model=:constant`).
+- `α, α0, ζ` — closure coefficients in Ohm’s law and Eq. (38), see paper §2.
+- `ε_dim` — kept for compatibility with auxiliary scripts (not used in the core push).
+- `λ_e_λΣ = m_e/(m_i+m_e)` — appears in the ionisation drag of Eq. (38).
+- `c_inv` — inverse dimensionless light speed (Alfvén normalisation: 1).
+- `H0_func(z)` — analytic external magnetic profile.
+- `N1` — initial macroparticles per cell.
+- `v_pic0` — initial PIC velocity scale (set from `v_th,ion`).
+- `collision_model ∈ (:spitzer, :constant)`.
+- `alpha_B` — Bohm anomaly coefficient (0 disables anomalous part of `ν_m`).
+- `E_z0_dimless` — uniform axial bias added to `E_z` after Eq. (38).
+- `pic_charge_factor` — global rescaling of macroparticle weights.
+- `include_self_B` — default for Faraday accumulation when `accumulate_induced_H` is
+  not explicitly passed to `run_simulation`.
+"""
 struct SimParams
     L::Float64
     M::Int
@@ -96,36 +146,56 @@ export lorentzian_Br, lorentzian_dBr_dz
 export sech2_Br, sech2_dBr_dz
 export compute_Br_profile, estimate_LB
 
+"""
+    gaussian_Br(z, B_max, z0, σ) -> Float64
+
+Gaussian radial-field amplitude `B(z) = B_max · exp(-(z-z0)² / (2σ²))`.
+Default `(B_max, z0, σ) = (0.02, 0.7, 0.2)` (dimensionless).
+"""
 function gaussian_Br(z::Float64, B_max::Float64 = 0.02, z0::Float64 = 0.7, σ::Float64 = 0.2)
     return B_max * exp(-(z - z0)^2 / (2 * σ^2))
 end
 
+"""Derivative `dB/dz` of `gaussian_Br`."""
 function gaussian_dBr_dz(z::Float64, B_max::Float64, z0::Float64, σ::Float64)
     return -(z - z0) / σ^2 * gaussian_Br(z, B_max, z0, σ)
 end
 
+"""Normalised gradient `(1/B_max) dB/dz` of the Gaussian profile."""
 function normalized_gradient_Br(z::Float64, B_max::Float64, z0::Float64, σ::Float64)
     return gaussian_dBr_dz(z, B_max, z0, σ) / B_max
 end
 
+"""Lorentzian field `B(z) = B_max / (1 + ((z-z0)/w)²)`."""
 function lorentzian_Br(z::Float64, B_max::Float64, z0::Float64, w::Float64)
     return B_max / (1.0 + ((z - z0) / w)^2)
 end
 
+"""Derivative `dB/dz` of `lorentzian_Br`."""
 function lorentzian_dBr_dz(z::Float64, B_max::Float64, z0::Float64, w::Float64)
     u = (z - z0) / w
     return -2.0 * B_max * u / (w * (1.0 + u^2)^2)
 end
 
+"""Sech² field `B(z) = B_max · sech²((z-z0)/w)`."""
 function sech2_Br(z::Float64, B_max::Float64, z0::Float64, w::Float64)
     return B_max * sech((z - z0) / w)^2
 end
 
+"""Derivative `dB/dz` of `sech2_Br`."""
 function sech2_dBr_dz(z::Float64, B_max::Float64, z0::Float64, w::Float64)
     u = (z - z0) / w
     return -2.0 * B_max * sech(u)^2 * tanh(u) / w
 end
 
+"""
+    compute_Br_profile(z_grid, B_max, z0, σ; model=:gaussian) -> NamedTuple
+
+Evaluate the chosen analytic field model on `z_grid` and return
+`(; Br, dBr_dz, grad_Br = dBr/B_max)`. Model selector: `:gaussian` (default),
+`:lorentzian`, `:sech2`. Width parameter is `σ` for Gaussian, `w` for the others
+(supplied through the same positional argument).
+"""
 function compute_Br_profile(
     z_grid::Vector{Float64},
     B_max::Float64,
@@ -158,6 +228,13 @@ function compute_Br_profile(
     return (; Br, dBr_dz = dBr, grad_Br)
 end
 
+"""
+    estimate_LB(σ; model=:gaussian) -> Float64
+
+Characteristic gradient length `L_B = max|B| / max|dB/dz|` of the chosen profile,
+expressed via the width parameter `σ` (or `w` for non-Gaussian models). Used as a
+rough order-of-magnitude reference, not by the solver itself.
+"""
 function estimate_LB(σ::Float64; model::Symbol = :gaussian)
     if model == :gaussian
         return σ * sqrt(ℯ)
@@ -221,6 +298,18 @@ end
 
 @inline local_nu_m(ν_m0::Float64, T_loc::Float64, model::Symbol = :spitzer) =
     local_nu_m(ν_m0, T_loc, model, 0.0, 0.0, 0.0, 1.0)
+"""
+    neutrals_evolution(n_a_new, n_a_old, n_ion, τ, v_a, kI, h, n_source)
+
+First-order upwind advection plus implicit ionisation sink for the neutral density:
+
+    n_a^{n+1}_i = (n_a^n_i - v_a τ (n_a^n_i - n_a^n_{i-1}) / h) / (1 + τ kI n_i^n_i),
+    n_a^{n+1}_1 = n_source                                          (Dirichlet inlet),
+    n_a^{n+1}_i ≥ 0                                                 (clamped).
+
+Issues a `@warn` when the upwind CFL `v_a τ / h` exceeds 1. Result is written into
+`n_a_new`.
+"""
 function neutrals_evolution(
     n_a_new::Vector{Float64},
     n_a_old::Vector{Float64},
@@ -244,6 +333,23 @@ function neutrals_evolution(
     end
 end
 
+"""
+    intermediate_temperature(T_new, T_old, n, vz, j, n_a, τ, γ, mi, me, ν_m0, kI, h; …)
+
+Single-step explicit update of the electron temperature on grid nodes:
+
+    T^{n+1} = T^n + τ [Q_coll + Q_ion - (γ-1) T^n ∂_z v_iz]
+
+with
+
+    Q_coll = (γ-1) (m_i/m_Σ) ν_m(T,|H_*|) j² / n_safe,   m_Σ = m_i + m_e,
+    Q_ion  = -(γ-1) k_I T^n n_a.
+
+`n_safe = n + max(n_reg_min, N_FLOOR)` regularises the Joule heating denominator.
+The result is clamped to `[T_FLOOR, T_cap]`. Boundary nodes are set by Neumann
+copy from interior. Optional `H_total` (with `alpha_B`, `ε`, `me`) feeds the
+Bohm-anomaly contribution to `ν_m`.
+"""
 function intermediate_temperature(
     T_new::Vector{Float64},
     T_old::Vector{Float64},
@@ -276,7 +382,7 @@ function intermediate_temperature(
         vz_ip1 = i == M ? (2 * vz[M + 1] - vz[M]) : vz[i + 1]
         dvz = (vz_ip1 - vz_im1) / (2h)
         Q_collision = (γ - 1) * (mi / mΣ) * ν_m * j[i]^2 / n_loc
-        Q_ionisation = (γ - 1) * kI * T_loc * n_a[i]
+        Q_ionisation = - (γ - 1) * kI * T_loc * n_a[i]
         T_new[i] = T_old[i] + τ * (Q_collision + Q_ionisation - (γ - 1) * T_loc * dvz)
         if !isfinite(T_new[i])
             T_new[i] = T_old[i]
@@ -309,9 +415,15 @@ function compute_current(j::Vector{Float64}, H_x::Vector{Float64}, h::Float64)
 end
 
 """
-Elliptic equation for `E_y` plus half-node update of induced `H_x^{ind}`: if `advance_induced_H = true`,
-Faraday accumulation `H_x^{new} = H_x^{old} + τ·∂_z E_y`; otherwise instantaneous increment
-`H_x^{new} = τ·∂_z E_y` (paper mode without accumulating induced field before the elliptic solve; see driver).
+Elliptic equation for `E_y` plus optional half-node Faraday update of induced `H_x^{ind}`.
+
+If `apply_faraday = true` (legacy single-pass): when `advance_induced_H = true`, Faraday accumulation
+`H_x^{new} = H_x^{old} + τ·∂_z E_y`; otherwise `H_x^{new} = τ·∂_z E_y`. Then `j` is updated from `H_x^{new}`.
+
+If `apply_faraday = false`, only `E_y` is solved; `H_x^{ind}` and `j` are returned unchanged so the driver can
+advance particles at one time level and apply Faraday after the particle push using this `E_y`
+(leapfrog-style: `H^{n+1} = H^n + τ·∂_z E_y^n`).
+
 Closure uses sum of interpolated induced and external field at nodes.
 
 External field via `H_ext_at_nodes` or `H0_func.(x_grid)`.
@@ -339,6 +451,7 @@ function electric_field_solver(
     me::Float64 = 1.0,
     H_ext_at_nodes::Union{Nothing, AbstractVector{Float64}} = nothing,
     advance_induced_H::Bool = false,
+    apply_faraday::Bool = true,
 )
     M = length(H_x_old)
     @assert length(E_y) == M + 1
@@ -402,6 +515,9 @@ function electric_field_solver(
         E_inner = solve_tridiagonal(view(a, 3:M), view(b, 2:M), view(c, 2:(M - 1)), view(d, 2:M))
         E_y[2:M] .= E_inner
     end
+    if !apply_faraday
+        return E_y, H_x_old, j_old
+    end
     H_x_new = similar(H_x_old)
     for i in 1:M
         d_faraday = τ * (E_y[i + 1] - E_y[i]) / h
@@ -412,6 +528,28 @@ function electric_field_solver(
     return E_y, H_x_new, j_new
 end
 
+"""
+    compute_Ez(Ez, H_x_old, H_x_new, j_old, j_new, n, T, vy, n_a_new, n_a_old,
+               α0, ζ, kI, va, h, λ_e_λΣ, β_Ez_coef, c_inv, τ, x_grid, H0_func, n_floor;
+               Ez_term1, Ez_term2, Ez_term3, Ez_term4, H_ext_at_nodes)
+
+Algebraic axial electric field (paper Eq. (38)):
+
+    E_z = (H_*/c) v_iy
+        - (λ_e/λ_Σ / ε) k_I n_a v_a
+        - (α_0 / n_safe) H_* j_y
+        - (ζ α_0 / n_safe) ∂_z(n T_e).
+
+Implementation notes:
+- If `H_x_old === H_x_new` and `j_old === j_new` (single time-layer call from the driver),
+  no half-sum buffers are allocated; otherwise mid-step `0.5(old+new)` averages are used.
+- Steklov smoothing with `radius=1, passes=5` is applied to `n·T` and `v_iy`; the Hall
+  source `j_y` is **not** smoothed (smoothing the curl-derived current would violate
+  consistency with `compute_current = ∂_z H`).
+- Optional output buffers `Ez_termK` capture the four contributions for diagnostics.
+- `H_*` at nodes uses interpolation from half-nodes plus `H_ext_at_nodes` (or `H0_func`).
+- Non-finite `Ez[i]` are reset to 0 to keep downstream PIC pushers stable.
+"""
 function compute_Ez(
     Ez::Vector{Float64},
     H_x_old::Vector{Float64},
@@ -443,27 +581,36 @@ function compute_Ez(
 )
     M = length(H_x_old)
     @assert length(Ez) == M + 1
-    H_x_mid = 0.5 .* (H_x_new .+ H_x_old)
-    j_mid = 0.5 .* (j_new .+ j_old)
-    H_interpolation = zeros(M + 1)
-    H_interpolation[1] = H_x_mid[1]
-    for i in 2:M
-        H_interpolation[i] = (H_x_mid[i] + H_x_mid[i - 1]) / 2
+    same_hj = H_x_old === H_x_new && j_old === j_new
+    same_na = n_a_new === n_a_old
+    if !same_hj
+        H_x_mid = 0.5 .* (H_x_new .+ H_x_old)
+        j_mid = 0.5 .* (j_new .+ j_old)
     end
-    H_interpolation[M + 1] = H_x_mid[M]
+    H_interpolation = zeros(M + 1)
+    if same_hj
+        hx = H_x_old
+        j_src = j_old
+    else
+        hx = H_x_mid
+        j_src = j_mid
+    end
+    H_interpolation[1] = hx[1]
+    for i in 2:M
+        H_interpolation[i] = (hx[i] + hx[i - 1]) / 2
+    end
+    H_interpolation[M + 1] = hx[M]
     if H_ext_at_nodes === nothing
         H_star = H_star_channel_nonneg.(H_interpolation .+ H0_func.(x_grid))
     else
         @assert length(H_ext_at_nodes) == M + 1
         H_star = H_star_channel_nonneg.(H_interpolation .+ H_ext_at_nodes)
     end
-    # Eq. (38): E_z = H_*·v_{iy} − …; Steklov (43) on PIC moments (n·T), v_iy, j with radius 1, 5 passes.
+    # Eq. (38): E_z = H_*·v_{iy} − …; Steklov (43) on PIC moments (n·T), v_iy only — do not smooth j (Hall source).
     nT = n .* T
     Steklov_smooth(nT, 1, 5)
     vy_sm = copy(vy)
     Steklov_smooth(vy_sm, 1, 5)
-    j_mid_sm = copy(j_mid)
-    Steklov_smooth(j_mid_sm, 1, 5)
     d_nT = zeros(M + 1)
     for i in 2:M
         d_nT[i] = (nT[i + 1] - nT[i - 1]) / (2h)
@@ -476,10 +623,10 @@ function compute_Ez(
     term3_arr = zeros(M + 1)
     term4_arr = zeros(M + 1)
     for i in 1:(M + 1)
-        n_a_mid = 0.5 * (n_a_new[i] + n_a_old[i])
+        n_a_mid = same_na ? n_a_new[i] : 0.5 * (n_a_new[i] + n_a_old[i])
         term1_arr[i] = H_star[i] * vy_sm[i] * c_inv
         term2_arr[i] = β_Ez_coef * kI * n_a_mid * va
-        term3_arr[i] = (α0 / n_safe[i]) * H_star[i] * j_mid_sm[i]
+        term3_arr[i] = (α0 / n_safe[i]) * H_star[i] * j_src[i]
         term4_arr[i] = (ζ * α0 / n_safe[i]) * d_nT[i]
     end
     Ez .= term1_arr .- term2_arr .- term3_arr .- term4_arr
@@ -512,6 +659,22 @@ const T_FLOOR = 0.01
 
 export deposit_particles, move_particles, new_particles_ionisation, remove_inactive_particles
 
+"""
+    deposit_particles(particles, x_grid, n, v_y, v_z, T, h, n_vy, n_vz, n_T)
+
+CIC deposition of macroparticles to grid nodes. For each active particle with weight `q`
+and velocity `(v_y, v_z)`:
+
+    n[k] += q · w_k,                 n_vy[k] += q · w_k · v_y,   etc.
+
+After the loop:
+
+    v_y[i] = n_vy[i] / n[i]   (similarly v_z, T) when n[i] > N_FLOOR; else zero / T_FLOOR,
+    n[i]   = n[i] / V_i       with V_i = h/2 at endpoints, h elsewhere (control-volume).
+
+`n_vy`, `n_vz`, `n_T` are scratch arrays sized `M + 1`. The function returns
+`(n, v_y, v_z, T)` but writes them in place.
+"""
 function deposit_particles(
     particles::Vector{Particle},
     x_grid::AbstractVector{Float64},
@@ -556,6 +719,32 @@ function deposit_particles(
     return n, v_y, v_z, T
 end
 
+"""
+    move_particles(particles, E_y0, E_y1, E_z0, E_z1, H_x0, H_x1, j0, j1,
+                   ν_m_grid0, ν_m_grid1, x_grid, x_half, τ, h, ε, mi, c_inv, H0_func, counters)
+        -> thrust_step
+
+Advance every active macroparticle over `τ` using Boris-style midpoint predictor–corrector
+for the ion characteristics (paper system (11), dimensionless):
+
+    ∂v_y/∂t = ε (E_y + (H_*/c) v_z - ν_m j_y),
+    ∂v_z/∂t = ε (E_z - (H_*/c) v_y),
+    ∂z/∂t   = v_z.
+
+Per-particle subcycling: `N0 = max(1, ceil(τ |v| / (0.25 h)))` so each substep moves
+at most 0.25 cell widths. Fields are **time-linearly interpolated** between the old (`*0`)
+and new (`*1`) snapshots — currently the driver passes the same arrays for both, which
+makes the push effectively single-layer.
+
+Boundary handling:
+- Right exit (`z ≥ L`): particle deactivated, `thrust_step += m_i q max(v_z, 0)`,
+  `counters.exited_right += 1` (∑ over the step gives the streamwise momentum flux out).
+- Left wall (`z ≤ 0`): absorbed (`counters.reflected_left += 1`); reinjection happens
+  through the neutral source.
+- NaN velocities: particle deactivated, `counters.nan += 1`.
+
+Returns `thrust_step` (raw axial momentum carried out at the right boundary).
+"""
 function move_particles(
     particles::Vector{Particle},
     E_y0::Vector{Float64},
@@ -646,6 +835,21 @@ function move_particles(
     return thrust_step
 end
 
+"""
+    new_particles_ionisation(particles, n_a_new, n_ion, x_grid, τ, kI, v_a, T_ion;
+                             charge_factor=1.0)
+
+Append macroparticles representing newly ionised xenon/krypton over `τ`. At each node `i`:
+
+    q_new = charge_factor · τ · n_a · n_i · k_I · V_i
+
+(`V_i = h/2` at endpoints, `h` elsewhere). If `q_new > MIN_PARTICLE_MASS` (1e-8) a
+particle is spawned at `x_grid[i]` with `(v_y, v_z) = (0, v_a)` and temperature `T_ion`;
+otherwise the contribution is dropped (avoids a long tail of ultra-small weights).
+
+The growing population is bounded by exit at the right wall plus volumetric recombination
+(`remove_inactive_particles`).
+"""
 function new_particles_ionisation(
     particles::Vector{Particle},
     n_a_new::Vector{Float64},
@@ -663,14 +867,21 @@ function new_particles_ionisation(
         vol = (i == 1 || i == M + 1) ? h / 2 : h
         n_a_loc = max(n_a_new[i], 0.0)
         n_i_loc = max(n_ion[i], 0.0)
-        n_i_eff = min(max(n_i_loc, N_ION_BIRTH_FLOOR_FRAC * n_a_loc), n_a_loc)
-        q_new = charge_factor * τ * n_a_loc * n_i_eff * kI * vol
+        q_new = charge_factor * τ * n_a_loc * n_i_loc * kI * vol
         q_new < MIN_PARTICLE_MASS && continue
         push!(particles, Particle(x_grid[i], 0.0, v_a, T_ion, q_new, true))
     end
     return particles
 end
 
+"""
+    remove_inactive_particles(particles, L, τ, kR)
+
+Volumetric recombination + housekeeping. Each active particle is killed with probability
+`P_rec = min(1, kR · τ)`; particles that drifted out of `[0, L]` are also marked inactive.
+After flagging, `filter!` compacts the vector. This is the only routine that shrinks the
+particle list, so it is the principal counterweight to `new_particles_ionisation`.
+"""
 function remove_inactive_particles(particles::Vector{Particle}, L::Float64, τ::Float64, kR::Float64)
     for p in particles
         if p.z < 0 || p.z > L

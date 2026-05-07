@@ -25,6 +25,13 @@ function paper_dimensionless_from_si(s::CharacteristicScalesSI, β0_m3s::Float64
     return (; ε, ξ, ζ, κ, k_I, ν_m0, ω_ci_SI = ω_ci, v_A_SI = v_A, t_char_SI = t_char, rho_SI = ρ)
 end
 
+"""
+    beta0_si_from_target_k_I(k_I, s) -> Float64
+
+Inverse of `k_I_from_beta0_si`: given the desired dimensionless ionisation Damköhler
+`k_I` and SI scales `s`, return the corresponding rate coefficient `β₀ [m³/s]`.
+Useful when calibrating against a target plasma-physics regime.
+"""
 function beta0_si_from_target_k_I(k_I::Float64, s::CharacteristicScalesSI)
     t_char = s.L_m / max(s.v_ref_m_s, 1e-300)
     return k_I / max(s.n_m3 * t_char, 1e-300)

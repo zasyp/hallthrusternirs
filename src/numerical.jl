@@ -4,6 +4,20 @@ module NumericalFunctionsSPT
 
 export solve_tridiagonal, interpolation_weights, smooth_field, Steklov_smooth, Steklov_smooth_clamped
 
+"""
+    solve_tridiagonal(a, b, c, d) -> Vector{Float64}
+
+Thomas algorithm for the tridiagonal system
+
+    b[1] x[1] +   c[1] x[2]                    = d[1]
+    a[i-1] x[i-1] + b[i] x[i] + c[i] x[i+1]    = d[i],  2 ≤ i ≤ n-1
+                                a[n-1] x[n-1] + b[n] x[n] = d[n]
+
+Inputs are checked: `length(a) == length(c) == n - 1`, `length(b) == length(d) == n`.
+
+`O(n)` operations, no pivoting (the elliptic `E_y` matrix in
+`PlasmaDynamics.electric_field_solver` is diagonally dominant by construction).
+"""
 function solve_tridiagonal(
     a::AbstractVector{Float64},
     b::AbstractVector{Float64},
@@ -29,6 +43,20 @@ function solve_tridiagonal(
     return x
 end
 
+"""
+    interpolation_weights(x, x_grid) -> (k0, k1, w0, w1)
+
+Linear (CIC) interpolation indices and weights for point `x` on the uniform mesh `x_grid`
+(`length(x_grid) = M + 1`, spacing `h`):
+
+    f(x) ≈ w0 · f[k0] + w1 · f[k1],   k1 = k0 + 1,   w0 + w1 = 1.
+
+Out-of-domain points are clamped to the boundary cell with `(w0, w1) = (1, 0)` so the
+caller falls back to a single-node value at `x_grid[1]` or `x_grid[end]`.
+
+Used by `deposit_particles`, `move_particles`, and per-particle temperature interpolation
+in `run_simulation`.
+"""
 function interpolation_weights(x::Float64, x_grid::AbstractVector{Float64})
     M = length(x_grid) - 1
     h = x_grid[2] - x_grid[1]
@@ -47,6 +75,13 @@ function interpolation_weights(x::Float64, x_grid::AbstractVector{Float64})
     end
 end
 
+"""
+    smooth_field(f, window) -> f
+
+In-place uniform box average of half-width `window` with prefix-sum acceleration
+(`O(n)` regardless of window size). Boundary cells use truncated windows
+(no reflection). Currently unused by the solver; kept for ad-hoc post-processing.
+"""
 function smooth_field(f::AbstractVector{Float64}, window::Int)
     n = length(f)
     g = similar(f)

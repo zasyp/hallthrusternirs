@@ -128,12 +128,20 @@ function _profile_line_dimless!(ax, gi::Int, snap, lbl, color)
     return nothing
 end
 
+"""
+    plot_results(snapshots, diagnostics, save_times; output_dir)
+
+Render the full set of dimensionless profile snapshots (18 fields per save time, paged
+4-per-figure) plus the time-history diagnostics (thrust, `τ`, particle count, `max|E_z|`,
+Hall parameter, peak `|v_ey|`, `Ey` RMS, `|H_self|/|H_ext|`) into PNGs in `output_dir`.
+File names are `profiles_all_fields_NN.png` and `diagnostics_time_series_NN.png`.
+"""
 function plot_results(snapshots, diagnostics, save_times; output_dir::AbstractString = joinpath(pwd(), "output", "figures"))
     isdir(output_dir) || mkpath(output_dir)
     if !isempty(snapshots)
         times = sort(collect(keys(snapshots)))
         titles = [
-            "n_a", "n_i", "v_iy (ions)", "v_ey = v_iy − β j/n", "v_iz (ions)", "T_e", "E_y",
+            "n_a", "n_i", "v_iy (ions)", "v_ey = -j/(e n_e)", "v_iz (ions)", "T_e", "E_y",
             "E_z", "j_y", "H_x (nodes)", "H_x (half nodes)", "H_ext", "H_total",
             "nu_m", "E_z term1: (H/c)v_iy", "E_z term2: -(λ_iλ_e/λ_Σ)β n_a v_a", "E_z term3: Hall j", "E_z term4: pressure grad",
         ]
@@ -244,6 +252,12 @@ function _thrust_box_smooth(x::AbstractVector, w::Int)
     return out
 end
 
+"""
+    DimensionalScales(; z_m, n_m3, v_ms, t_s, Te_eV, E_vm, j_am2, B_t, nu_s, thrust_n)
+
+Per-quantity dimensional factors (one `Float64` each) that map dimensionless solver
+output to SI for the dimensional plots. Built from `si_plot_physical_scales`.
+"""
 Base.@kwdef struct DimensionalScales
     z_m::Float64
     n_m3::Float64
@@ -261,9 +275,8 @@ function _profile_line_dim!(ax, gi::Int, s, scales, lbl, color)
     z = s.z .* scales.z_m
     z_half = s.z_half .* scales.z_m
     v_iy_dim = s.v_iy .* scales.v_ms
-    j_si = s.j .* scales.j_am2
-    n_si = s.n_i .* scales.n_m3
-    v_ey_dim = v_iy_dim .- j_si ./ (PaperScales.e_C .* n_si)
+    # Use the diagnostic v_ey already stored in the snapshot: `v_ey ≈ -j/(e n_e)`.
+    v_ey_dim = s.v_ey .* scales.v_ms
     if gi == 1
         lines!(ax, z, s.n_a .* scales.n_m3, color = color, label = lbl)
     elseif gi == 2
@@ -304,12 +317,20 @@ function _profile_line_dim!(ax, gi::Int, s, scales, lbl, color)
     return nothing
 end
 
+"""
+    plot_results_dimensional(snapshots, diagnostics, save_times, scales; output_dir)
+
+Same layout as `plot_results` but every axis is multiplied by the corresponding
+`DimensionalScales` factor and labelled with SI units. Also produces a smoothed thrust
+trace `diagnostics_thrust_smoothed_dimensional.png` (centred moving average with an
+adaptive window proportional to `length(time)/40`).
+"""
 function plot_results_dimensional(snapshots, diagnostics, save_times, scales::DimensionalScales; output_dir::AbstractString = joinpath(pwd(), "output", "figures"))
     isdir(output_dir) || mkpath(output_dir)
     if !isempty(snapshots)
         times = sort(collect(keys(snapshots)))
         titles = [
-            "n_a [m^-3]", "n_i [m^-3]", "v_iy ions [m/s]", "v_ey [m/s] = v_iy − j_y/(e n_i)", "v_iz ions [m/s]", "T_e [eV]", "E_y [V/m]",
+            "n_a [m^-3]", "n_i [m^-3]", "v_iy ions [m/s]", "v_ey [m/s] = -j_y/(e n_e)", "v_iz ions [m/s]", "T_e [eV]", "E_y [V/m]",
             "E_z [V/m]", "j_y [A/m^2]", "H_x [T]", "H_x_half [T]", "H_ext [T]", "H_total [T]",
             "nu_m [1/s]", "E_z term1 [V/m]", "E_z term2 [V/m]", "E_z term3 [V/m]", "E_z term4 [V/m]",
         ]
@@ -415,10 +436,55 @@ using ..PaperScales
 export run_simulation
 
 const MI_XE_KG = 2.18e-25
-const MU0_SI = 4π * 1e-7
 # Fallback B [T] if `si_plot_scales === nothing`.
 const B_REF_T = 0.012
 default_plot_dir() = joinpath(@__DIR__, "..", "output", "figures")
+
+"""Active set of `τ` constraints used by the adaptive timestep heuristic.
+
+Members:
+- `:neutral_cfl`  — `safety · h / v_a`              (axial neutral CFL).
+- `:ion_cfl`      — `safety · h / max|v_iz|`        (axial ion CFL, synchronizes PIC subcycling).
+- `:collision`    — `safety / max(ν_m)`             (electron-momentum collision frequency).
+- `:hall`         — `safety · h / v_H`,
+                    `v_H = α0 · |H_*| / (n · c)`     (Hall-whistler CFL for the explicit
+                    part of `compute_current = ∂_z H`).
+
+Electron-cyclotron CFL is intentionally absent: in the hybrid model electrons enter only via the
+elliptic Ohm solve for `E_y`, they are not advanced by an explicit equation of motion, so a
+`1/ω_ce` constraint would clamp `τ` for non-physical reasons.
+"""
+const _TAU_NAMES = (:neutral_cfl, :ion_cfl, :collision, :hall)
+
+"""
+    _resolve_tau_constraints(spec) -> Tuple{Vararg{Symbol}}
+
+Internal helper that normalises the `tau_constraints` argument of `run_simulation`:
+- a single `Symbol` such as `:full`, `:none`, `:fluid_only` or one of `_TAU_NAMES`,
+- or a `Tuple`/`Vector` of `Symbol` entries from `_TAU_NAMES` (duplicates are removed).
+
+Throws `ArgumentError` for unknown presets or unrecognised constraint names.
+"""
+function _resolve_tau_constraints(spec)
+    if spec isa Symbol
+        spec === :full          && return _TAU_NAMES
+        spec === :none          && return ()
+        spec === :fluid_only    && return (:neutral_cfl, :ion_cfl, :collision)
+        spec in _TAU_NAMES      && return (spec,)
+        throw(ArgumentError("Unknown tau_constraints preset :$spec; expected :full, :none, :fluid_only, " *
+            "any of $_TAU_NAMES, or a Tuple/Vector of those names."))
+    elseif spec isa Tuple || spec isa AbstractVector
+        out = Symbol[]
+        for k in spec
+            k isa Symbol && k in _TAU_NAMES ||
+                throw(ArgumentError("tau_constraints entries must be one of $_TAU_NAMES; got $k"))
+            k in out || push!(out, k)
+        end
+        return Tuple(out)
+    else
+        throw(ArgumentError("tau_constraints must be a Symbol or a Tuple/Vector of Symbols; got $(typeof(spec))"))
+    end
+end
 
 @inline function _steklov_dispatch!(f::AbstractVector{Float64}, radius::Int, passes::Int, boundary::Symbol)
     if boundary === :clamped
@@ -432,16 +498,38 @@ default_plot_dir() = joinpath(@__DIR__, "..", "output", "figures")
 end
 
 """
-`mode = :case2` — hybrid EMHD (paper sec. 4): E_y from elliptic solve; E_z from Eq. (38).
-If explicit `accumulate_induced_H` is not passed, defaults to `params.include_self_B`; paper-style
-non-accumulating mode resets `H_x` on half-nodes before the elliptic; induced field enters as
-`τ·∂_z E_y` unless Faraday accumulation is on (`electric_field_solver` advances `advance_induced_H`).
-With accumulation: `H_ind^{new} = H_ind^{old} + τ·∂_z E_y`.
-Adds uniform axial offset `E0_dimless` after (38).
+`mode = :case2` — hybrid EMHD (paper sec. 4): `E_y` from elliptic (Ohm); particles are advanced with a single
+time level (`E^n`, `H^n`, `j^n`), then Faraday updates `H_ind^{n+1} = H_ind^n + τ·∂_z E_y^n` (or non-accumulating
+equivalent). `E_z` from Eq. (38) uses one aligned layer (`H^n`, `j^n`, moments after temperature update).
+
+If explicit `accumulate_induced_H` is not passed, defaults to `params.include_self_B`. With `accumulate_induced_H =
+false`, Faraday gives `H_ind^{n+1} = τ·∂_z E_y^n` (no cross-step accumulation); with `true`, `H_ind^{n+1} = H_ind^n +
+τ·∂_z E_y^n`. Induced field is never cleared at step start (that would mix quasi-static and accumulating induction).
+
+With accumulation: each step adds `τ·∂_z E_y^n` to `H_ind` after the particle push.
 
 `mode = :case1` — no induction (figures 4–7 style): E_y≡0, H_ind≡0, j≡0, E_z from `params.E_z0_dimless + E0_dimless`.
 
-Steklov PIC/field smoothing: default field half-window 20 (paper M=100, ℓ=20-style setting).
+Steklov PIC smoothing: default half-window 20 on deposited moments only — **not** applied to `E`, `H`, or grid `j`.
+
+# Adaptive timestep
+
+`τ = min(active_constraints..., total_time - t)`. Active set is selected by `tau_constraints`
+(a preset Symbol or an explicit collection of `_TAU_NAMES`). Per-constraint safety factors:
+
+- `:neutral_cfl` — `tau_neutral_safety · h / v_a`     (default 1.0).
+- `:ion_cfl`     — `tau_ion_safety · h / max|v_iz|`   (default 0.2).
+- `:collision`   — `tau_collision_safety / max(ν_m)`  (default 0.5).
+- `:hall`        — `tau_hall_safety · h / v_H` with `v_H = α0 |H_*|/(n c)` (default 1.0).
+
+Presets:
+- `:full` (default) — all four.
+- `:fluid_only`   — `(:neutral_cfl, :ion_cfl, :collision)` (drop Hall, useful when Hall dominates τ).
+- `:none`         — only `total_time - t` (debug).
+- A single member of `_TAU_NAMES`, or a `Tuple`/`Vector` of names — explicit set.
+
+`log_tau_constraint = true`: each periodic step report names the active limiter; a final summary
+prints the share of steps each limiter dominated.
 """
 function run_simulation(
     params::SimParams;
@@ -460,6 +548,14 @@ function run_simulation(
     steklov_field_passes::Int = 5,
     steklov_field_boundary::Symbol = :reflect,
     accumulate_induced_H::Union{Nothing, Bool} = nothing,
+    induced_H_damping::Float64 = 0.0,
+    tau_constraints::Union{Symbol, Tuple, AbstractVector} = :full,
+    tau_neutral_safety::Float64 = 1.0,
+    tau_ion_safety::Float64 = 0.2,
+    tau_collision_safety::Float64 = 0.5,
+    tau_hall_safety::Float64 = 1.0,
+    tau_min_floor::Float64 = 1e-14,
+    log_tau_constraint::Bool = true,
 )
     mode in (:case1, :case2) || throw(ArgumentError("mode must be :case1 or :case2 (got $mode)"))
     steklov_field_boundary in (:reflect, :clamped) ||
@@ -467,6 +563,10 @@ function run_simulation(
     steklov_pic_boundary in (:reflect, :clamped) ||
         throw(ArgumentError("steklov_pic_boundary must be :reflect or :clamped; got $steklov_pic_boundary"))
     acc_ind = accumulate_induced_H === nothing ? params.include_self_B : accumulate_induced_H
+    active_tau_constraints = _resolve_tau_constraints(tau_constraints)
+    println("Adaptive τ constraints active: ",
+            isempty(active_tau_constraints) ? "(none — only `total_time - t`)" :
+            join(string.(active_tau_constraints), ", "))
     L = params.L
     M = params.M
     h = params.h
@@ -489,9 +589,9 @@ function run_simulation(
     x_grid = range(0, L, length = M + 1)
     x_half = range(h / 2, L - h / 2, length = M)
     Hext_dim_max_pre = maximum(abs.(H0_func.(collect(x_grid))))
-    # SI currents: j_SI = j_dim·j_am2, j_y = e n(v_iy−v_ey) ⇒ v_ey = v_iy − j_SI/(e n_SI).
-    # Dimensionless [v]: v_ey = v_iy − β j/n with β = j_am2/(e n_ref v_ref). If no
-    # `si_plot_scales`, use β=1 (legacy j/n scaling from (11) only when consistent).
+    # Dimensionless conversion factor for `v_ey ≈ -j/(e n)`: with `j_am2 = e n_ref v_ref`,
+    # `j/(e n)` already has units of `v_ref` so the dimensionless factor is exactly 1. Kept as
+    # a parameter so a non-Alfvén/plasma current scaling would still produce a correct diagnostic.
     vey_j_over_en = 1.0
     if si_plot_scales !== nothing
         _ps_vey = PaperScales.si_plot_physical_scales(si_plot_scales, Hext_dim_max_pre)
@@ -523,10 +623,6 @@ function run_simulation(
     n_ion = zeros(M + 1)
     v_iy = zeros(M + 1)
     v_iz = zeros(M + 1)
-    H_x_old = copy(H_x_half)
-    j_old = copy(j)
-    E_y_old = copy(E_y)
-    E_z_old = copy(E_z)
     snapshots = Dict{Float64, NamedTuple}()
     thrust_time = Float64[]
     thrust_values = Float64[]
@@ -550,7 +646,26 @@ function run_simulation(
     H_nodes_work = zeros(M + 1)
     H_total_work = zeros(M + 1)
     T_tilde_buf = similar(T_e)
+    ν_m_work = zeros(M + 1)
+    beta_e_buf = zeros(M + 1)
+    tau_constraint_hits = Dict{Symbol, Int}(:total_time => 0)
+    for k in active_tau_constraints
+        tau_constraint_hits[k] = 0
+    end
+    last_tau_constraint = :total_time
     DiagnosticsMetrics.print_dimensionless_diagnostics(params)
+    if si_plot_scales !== nothing
+        _ps_chk = PaperScales.si_plot_physical_scales(si_plot_scales, Hext_dim_max_pre)
+        # `compute_current` uses `j = ∂_z H` (Ampere/Maxwell form), so its natural scale is
+        # `B/(μ0 L)`. The plotted scale `e n v_ref` matches **iff** `L = c/ω_pi`. The ratio below
+        # equals 1 in pure Alfvén/skin-depth normalization; deviations measure the residual mismatch.
+        j_maxwell = _ps_chk.B_t / (PaperScales.μ0_SI * _ps_chk.z_m)
+        j_plasma  = PaperScales.e_C * _ps_chk.n_m3 * _ps_chk.v_ms
+        ratio_jM_over_jP = j_maxwell / max(j_plasma, eps())
+        println("  current-scale consistency: B/(μ0 L) / (e n v_ref) = ",
+                round(ratio_jM_over_jP, sigdigits = 5),
+                "   (=1 ⇔ L equals ion skin depth c/ω_pi; otherwise residual Alfvén mismatch)")
+    end
     # Eq. (38): coefficient for ionization term in E_z.
     β_Ez_coef = params.λ_e_λΣ / max(params.ε, eps())
     t = 0.0
@@ -559,9 +674,9 @@ function run_simulation(
     n_floor_physical = 0.01 / max(L, eps())
     T_cap = 30.0
     while t < total_time
-        if mode === :case2 && !acc_ind
-            fill!(H_x_half, 0.0)
-        end
+        # Do NOT reset H_x_half at step start. Faraday update is applied after particle push at
+        # end of step (`H^{n+1} = H^n + τ·∂_z E_y` with `acc_ind=true`, or `H^{n+1} = τ·∂_z E_y`
+        # with `acc_ind=false`). Resetting here would mix quasi-static and full-induction closures.
         deposit_particles(particles, x_grid, n_ion, v_iy, v_iz, T_e, h, n_vy_buf, n_vz_buf, n_T_buf)
         # Sec. 3 Eq. (22); Steklov (43)/(44): deposit smoothing (default (43), reflect boundaries).
         _steklov_dispatch!(n_ion, steklov_pic_half_width, steklov_pic_passes, steklov_pic_boundary)
@@ -569,7 +684,7 @@ function run_simulation(
         _steklov_dispatch!(v_iz, steklov_pic_half_width, steklov_pic_passes, steklov_pic_boundary)
         _steklov_dispatch!(T_e, steklov_pic_half_width, steklov_pic_passes, steklov_pic_boundary)
         n_reg_min = max.(0.01 .* n_a_old, n_floor_physical)
-        max_vz = max(maximum(abs.(v_iz)), 1e-12)
+        max_vz = max(maximum(abs, v_iz), 1e-12)
         @inbounds for i in 1:(M + 1)
             H_ext_buf[i] = H0_func(x_grid[i])
         end
@@ -580,20 +695,50 @@ function run_simulation(
         end
         H_nodes_work[M + 1] = H_x_half[M]
         @. H_total_work = PlasmaDynamics.H_star_channel_nonneg(H_nodes_work + H_ext_buf)
-        ν_m_grid = PlasmaDynamics.local_nu_m.(
+        @. ν_m_work = PlasmaDynamics.local_nu_m(
             ν_m0, T_e, params.collision_model, H_total_work,
             params.alpha_B, params.ε, params.me,
         )
-        ν_max = maximum(ν_m_grid)
-        τ_coll = 0.5 / max(ν_max, 1e-8)
-        τ = min(h / v_a, 0.2 * h / max_vz, τ_coll, total_time - t)
+        ν_max = maximum(ν_m_work)
+        # Single pass over interior nodes for the Hall-whistler speed `v_H = α0 |H_*|/(n c)`.
+        hall_v_max = 0.0
+        @inbounds for i in 2:M
+            Hs = abs(H_total_work[i])
+            n_loc = n_ion[i] + max(n_reg_min[i], n_floor_physical)
+            vh = params.α0 * Hs * c_inv / max(n_loc, eps())
+            hall_v_max = max(hall_v_max, vh)
+        end
+        τ = total_time - t
+        last_tau_constraint = :total_time
+        @inline function _consider!(name::Symbol, candidate::Float64)
+            if isfinite(candidate) && candidate > 0 && candidate < τ
+                τ = candidate
+                last_tau_constraint = name
+            end
+            return nothing
+        end
+        for name in active_tau_constraints
+            if name === :neutral_cfl
+                _consider!(:neutral_cfl, tau_neutral_safety * h / max(v_a, 1e-12))
+            elseif name === :ion_cfl
+                _consider!(:ion_cfl, tau_ion_safety * h / max(max_vz, 1e-12))
+            elseif name === :collision
+                _consider!(:collision, tau_collision_safety / max(ν_max, 1e-8))
+            elseif name === :hall
+                _consider!(:hall, tau_hall_safety * h / max(hall_v_max, 1e-30))
+            end
+        end
         if !isfinite(τ) || τ <= 0
             τ = min(tau_start_max, 0.001 * h / max(v_a, 1e-12))
+            last_tau_constraint = :recovery
             @warn "Time step τ invalid; reset to $τ"
-        elseif τ < 1e-14
+        elseif τ < tau_min_floor
+            τ_old = τ
             τ = min(1e-8, 0.01 * h / max(max_vz, 1e3), h / max(v_a, 1e-12), total_time - t)
-            @warn "Time step τ extremely small; using $τ (avoided 1e-4 clamp)"
+            last_tau_constraint = :recovery
+            @warn "Time step τ=$τ_old below floor ($tau_min_floor); using $τ"
         end
+        tau_constraint_hits[last_tau_constraint] = get(tau_constraint_hits, last_tau_constraint, 0) + 1
         compute_current(j, H_x_half, h)
         kI_eff = kI
         intermediate_temperature(T_tilde_buf, T_e, n_ion, v_iz, j, n_a_old, τ, γ, mi, me, ν_m0, kI_eff, h;
@@ -608,32 +753,14 @@ function run_simulation(
         end
         n_a_new = similar(n_a_old)
         neutrals_evolution(n_a_new, n_a_old, n_ion, τ, v_a, kI_eff, h, n_a_left)
-        if mode === :case2 && acc_ind
-            copyto!(H_x_old, H_x_half)
-        elseif mode === :case2
-            fill!(H_x_old, 0.0)
-        else
-            copyto!(H_x_old, H_x_half)
-        end
-        copyto!(j_old, j)
-        copyto!(E_y_old, E_y)
-        copyto!(E_z_old, E_z)
         if mode === :case2
-            E_y, H_x_half, j = electric_field_solver(E_y, H_x_old, j_old, n_ion, v_iz, T_e, τ, α, ν_m0, h, x_grid, H0_func, :j0, v_a, c_inv;
+            E_y, H_x_half, j = electric_field_solver(E_y, H_x_half, j, n_ion, v_iz, T_e, τ, α, ν_m0, h, x_grid, H0_func, :j0, v_a, c_inv;
                 n_reg_min = n_reg_min,
                 collision_model = params.collision_model,
                 alpha_B = params.alpha_B, ε = params.ε, me = params.me,
-                H_ext_at_nodes = H_ext_buf, advance_induced_H = acc_ind)
-            compute_Ez(E_z, H_x_old, H_x_half, j_old, j, n_ion, T_e, v_iy, n_a_new, n_a_old, α0, ζ, kI_eff, v_a, h, params.λ_e_λΣ, β_Ez_coef, c_inv, τ, x_grid, H0_func, n_floor_physical;
+                H_ext_at_nodes = H_ext_buf, advance_induced_H = acc_ind, apply_faraday = false)
+            compute_Ez(E_z, H_x_half, H_x_half, j, j, n_ion, T_e, v_iy, n_a_new, n_a_new, α0, ζ, kI_eff, v_a, h, params.λ_e_λΣ, β_Ez_coef, c_inv, τ, x_grid, H0_func, n_floor_physical;
                 Ez_term1 = E_z_term1, Ez_term2 = E_z_term2, Ez_term3 = E_z_term3, Ez_term4 = E_z_term4, H_ext_at_nodes = H_ext_buf)
-            _steklov_dispatch!(H_x_half, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
-            _steklov_dispatch!(E_y, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
-            _steklov_dispatch!(E_z, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
-            _steklov_dispatch!(j, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
-            _steklov_dispatch!(E_z_term1, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
-            _steklov_dispatch!(E_z_term2, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
-            _steklov_dispatch!(E_z_term3, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
-            _steklov_dispatch!(E_z_term4, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
             E_z .+= E0_dimless
         else
             fill!(E_y, 0.0)
@@ -652,17 +779,42 @@ function run_simulation(
         end
         H_nodes_work[M + 1] = H_x_half[M]
         @. H_total_work = PlasmaDynamics.H_star_channel_nonneg(H_nodes_work + H_ext_buf)
-        ν_m_grid = PlasmaDynamics.local_nu_m.(
+        @. ν_m_work = PlasmaDynamics.local_nu_m(
             ν_m0, T_e, params.collision_model, H_total_work,
             params.alpha_B, params.ε, params.me,
         )
-        thrust_step = move_particles(particles, E_y_old, E_y, E_z_old, E_z, H_x_old, H_x_half, j_old, j, ν_m_grid, ν_m_grid, x_grid, x_half, τ, h, ε, mi, c_inv, H0_func, counters)
-        beta_e_diag = DiagnosticsMetrics.hall_parameter_electron.(Ref(params), H_total_work, ν_m_grid)
+        thrust_step = move_particles(particles, E_y, E_y, E_z, E_z, H_x_half, H_x_half, j, j, ν_m_work, ν_m_work, x_grid, x_half, τ, h, ε, mi, c_inv, H0_func, counters)
+        if mode === :case2
+            if acc_ind
+                @inbounds for i in 1:M
+                    H_x_half[i] += τ * (E_y[i+1] - E_y[i]) / h
+                end
+            else
+                @inbounds for i in 1:M
+                    H_x_half[i] = τ * (E_y[i+1] - E_y[i]) / h
+                end
+            end
+            compute_current(j, H_x_half, h)
+            if induced_H_damping > 0
+                @. H_x_half *= (1.0 - induced_H_damping)
+            end
+        end
+        H_nodes_work[1] = H_x_half[1]
+        for i in 2:M
+            H_nodes_work[i] = 0.5 * (H_x_half[i - 1] + H_x_half[i])
+        end
+        H_nodes_work[M + 1] = H_x_half[M]
+        @. H_total_work = PlasmaDynamics.H_star_channel_nonneg(H_nodes_work + H_ext_buf)
+        @. ν_m_work = PlasmaDynamics.local_nu_m(
+            ν_m0, T_e, params.collision_model, H_total_work,
+            params.alpha_B, params.ε, params.me,
+        )
+        beta_e_buf .= DiagnosticsMetrics.hall_parameter_electron.(Ref(params), H_total_work, ν_m_work)
         push!(thrust_time, t + τ)
         thrust_instant = thrust_step / τ
         push!(thrust_values, thrust_instant)
         push!(tau_history, τ)
-        push!(max_ez_history, maximum(abs.(E_z)))
+        push!(max_ez_history, maximum(abs, E_z))
         active_ratio_cells = findall(>(0.0), n_a_new)
         if isempty(active_ratio_cells)
             push!(ion_to_neutral_ratio_history, 0.0)
@@ -670,8 +822,8 @@ function run_simulation(
             push!(ion_to_neutral_ratio_history, maximum(n_ion[active_ratio_cells] ./ n_a_new[active_ratio_cells]))
         end
         push!(self_to_ext_B_ratio_history, maximum(abs.(H_nodes_work)) / max(maximum(abs.(H_ext_buf)), eps()))
-        push!(hall_beta_mean_history, sum(beta_e_diag) / length(beta_e_diag))
-        push!(hall_beta_peak_history, maximum(beta_e_diag))
+        push!(hall_beta_mean_history, sum(beta_e_buf) / length(beta_e_buf))
+        push!(hall_beta_peak_history, maximum(beta_e_buf))
         active_zone = findall(>(0.0), n_a_new)
         if isempty(active_zone)
             push!(vey_mean_history, 0.0)
@@ -680,7 +832,10 @@ function run_simulation(
             push!(ey_rms_history, 0.0)
         else
             n_safe_zone = max.(n_ion[active_zone], eps())
-            vey_zone = v_iy[active_zone] .- vey_j_over_en .* j[active_zone] ./ n_safe_zone
+            # Diagnostic v_ey: dominant Hall drift is electronic, ions are largely radially confined; use
+            # `v_ey ≈ -j_y/(e n_e)` (quasineutrality + ion azimuthal velocity ≈ 0). `vey_j_over_en` carries
+            # the dimensionless→SI conversion of `j/(e n)` (=1 with `j_am2 = e n v`).
+            vey_zone = .-vey_j_over_en .* j[active_zone] ./ n_safe_zone
             ey_zone = E_y[active_zone]
             push!(vey_mean_history, sum(vey_zone) / length(vey_zone))
             push!(vey_peak_history, maximum(abs.(vey_zone)))
@@ -692,24 +847,13 @@ function run_simulation(
         push!(particle_count_history, length(particles))
         for st in save_times
             if abs(t + τ - st) < τ / 2 && !haskey(snapshots, st)
-                H_nodes = similar(x_grid)
-                H_nodes[1] = H_x_half[1]
-                for i in 2:M
-                    H_nodes[i] = 0.5 * (H_x_half[i - 1] + H_x_half[i])
-                end
-                H_nodes[M + 1] = H_x_half[M]
+                # Reuse end-of-step nodal fields (already consistent with H_x_half); avoids redundant
+                # interpolation and extra `local_nu_m` / `H_star` allocations.
                 H_ext = copy(H_ext_buf)
-                H_tot_snap = PlasmaDynamics.H_star_channel_nonneg.(H_nodes .+ H_ext_buf)
-                ν_m = PlasmaDynamics.local_nu_m.(
-                    ν_m0, T_e, params.collision_model, H_tot_snap,
-                    params.alpha_B, params.ε, params.me,
-                )
                 n_safe = max.(n_ion, eps())
-                # v_ey: cf. `vey_j_over_en`; match j_y [A/m^2] & quasineutrality j = e n (v_iy−v_ey).
-                v_ey = v_iy .- vey_j_over_en .* j ./ n_safe
-                H_tot = H_tot_snap
+                v_ey = .-vey_j_over_en .* j ./ n_safe
                 snapshots[st] = (;
-                    z = copy(x_grid),
+                    z = collect(x_grid),
                     z_half = collect(x_half),
                     n_a = copy(n_a_new),
                     n_i = copy(n_ion),
@@ -725,10 +869,10 @@ function run_simulation(
                     E_z_term4 = copy(E_z_term4),
                     j = copy(j),
                     H_x_half = copy(H_x_half),
-                    H_x = H_nodes,
+                    H_x = copy(H_nodes_work),
                     H_ext = H_ext,
-                    H_total = H_tot,
-                    nu_m = ν_m,
+                    H_total = copy(H_total_work),
+                    nu_m = copy(ν_m_work),
                 )
             end
         end
@@ -736,13 +880,24 @@ function run_simulation(
         t += τ
         step += 1
         if step % 20 == 0 || t >= total_time
-            println("Step $step, t=$t, #particles=$(length(particles)), ",
+            tau_msg = log_tau_constraint ? ", τ=$(τ) (limited by :$(last_tau_constraint))" : ""
+            println("Step $step, t=$t, #particles=$(length(particles))$tau_msg, ",
                 "min_n=$(minimum(n_ion)), max_Ez=$(maximum(E_z)), ",
                 "max(n_i/n_a)=$(ion_to_neutral_ratio_history[end]), ",
                 "max(|Hself|/|Hext|)=$(self_to_ext_B_ratio_history[end]), ",
                 "peak|v_ey|=$(vey_peak_history[end]), Ey_rms=$(ey_rms_history[end]), ",
                 "nan=$(counters.nan), ",
                 "exited=$(counters.exited_right), reflected=$(counters.reflected_left)")
+        end
+    end
+    if log_tau_constraint && step > 0
+        total_hits = sum(values(tau_constraint_hits))
+        println("Adaptive τ — limiter share over $step steps:")
+        for k in (:total_time, _TAU_NAMES..., :recovery)
+            n_hits = get(tau_constraint_hits, k, 0)
+            n_hits == 0 && continue
+            pct = round(100 * n_hits / max(total_hits, 1), digits = 1)
+            println("  :$k\t$n_hits / $total_hits ($(pct)%)")
         end
     end
     if do_plot
@@ -796,7 +951,7 @@ function run_simulation(
                 t_s = z_scale_m / v_scale_ms,
                 Te_eV = 10.0,
                 E_vm = v_scale_ms * b_scale_t,
-                j_am2 = b_scale_t / (MU0_SI * z_scale_m),
+                j_am2 = PaperScales.e_C * scales_n_ref * v_scale_ms,
                 B_t = b_scale_t,
                 nu_s = v_scale_ms / z_scale_m,
                 thrust_n = thrust_b,
