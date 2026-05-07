@@ -97,7 +97,7 @@ println(
 # - Ion transit time at U_discharge=250 V: t_transit ≈ L / sqrt(2eU/m_i) ≈ 1.7 μs ≈ 4.2 t_char.
 # - Steady state typically reached after 5-8 transit times → T_END ≈ 30 is sufficient and ~3× cheaper
 #   than T_END = 100 (no further physics is captured beyond the steady state).
-const T_END  = 3.0
+const T_END  = 50.0
 const FIGDIR = joinpath(ROOT, "output", "figures", "spt70_krypton")
 
 CoreSolver.run_simulation(

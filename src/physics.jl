@@ -52,7 +52,9 @@ paper-§2 / §3 normalisation (`[L]=L_m`, `[v]=v_ref`, `[t]=L/v`, etc.):
   (`kI = β₀ n L / v`, `kR = ν_R L / v`).
 - `γ` — adiabatic index used in `intermediate_temperature`.
 - `ε` — dimensionless time scale `ω_ci · t_char` (paper Eq. (11)).
-- `ν_m0` — Spitzer prefactor, `ν_m = ν_m0 / T^{3/2}` (or constant if `collision_model=:constant`).
+- `ν_m0` — paper §2 magnetic-viscosity prefactor `c²/(4π σ_0 [T]^{3/2} [L][v])`,
+  with `ν_m = ν_m0 / T^{3/2}` (or `ν_m = ν_m0` for `collision_model=:constant`).
+  Built by `PaperScales.nu_m0_dimensionless`; see also `local_nu_m`.
 - `α, α0, ζ` — closure coefficients in Ohm’s law and Eq. (38), see paper §2.
 - `ε_dim` — kept for compatibility with auxiliary scripts (not used in the core push).
 - `λ_e_λΣ = m_e/(m_i+m_e)` — appears in the ionisation drag of Eq. (38).
@@ -272,20 +274,25 @@ Name `H_star_channel_nonneg` is kept for existing call sites.
 @inline H_star_channel_nonneg(H_ind_plus_ext::Float64) = H_ind_plus_ext
 
 """
-Local electron collision frequency:
+Local dimensionless magnetic viscosity (paper §2):
 
-    ν_e = ν_base(T) + α_B · ω_ce_dim,     ω_ce_dim = ε · |H| / m_e,
+    ν_m = ν_base(T) + ξ² · α_B · ω_ce_dim,    ω_ce_dim = ε · |H_*| / m_e,
 
-with `ν_base` set by collision model:
-- `:spitzer`  — ν_base = ν_m0 / (T^{3/2} + T_FLOOR^{3/2});
-- `:constant` — ν_base = ν_m0 (effective anomalous rate, ν_e ≈ const).
+with `ν_base` from the chosen collision model:
+- `:spitzer`  — `ν_base = ν_m0 / (T^{3/2} + T_FLOOR^{3/2})` (paper Eq. for `ν_m`);
+- `:constant` — `ν_base = ν_m0` (effective anomalous plateau, `ν_m ≈ const`).
 
-Second term — Bohm-like anomaly (Hagelaar 2002, Boeuf–Garrigues); off when α_B = 0,
-α_B = 1/16 matches classical Bohm limit.
+Here `ν_m0 = c²/(4π σ_0 [T]^{3/2} [L][v])` is the paper-convention prefactor (a magnetic
+diffusivity, not a raw collision frequency); see `PaperScales.nu_m0_dimensionless`. The
+Bohm-anomaly term is the Hagelaar–Bœuf form `ν_e_anom = α_B ω_ce` converted to the same
+magnetic-diffusivity convention by the factor `ξ² = (c/ω_pe / [L])²`. Pass `xi_sq` as the
+value of `ξ²` for the simulation (default 1.0 corresponds to the legacy
+collision-frequency convention used before the §2 alignment, kept only for backwards
+compatibility of stand-alone callers).
 """
 @inline function local_nu_m(
     ν_m0::Float64, T_loc::Float64, model::Symbol, H_loc::Float64,
-    alpha_B::Float64, ε::Float64, me::Float64,
+    alpha_B::Float64, ε::Float64, me::Float64, xi_sq::Float64 = 1.0,
 )
     ν_base = if model === :constant
         ν_m0
@@ -293,12 +300,12 @@ Second term — Bohm-like anomaly (Hagelaar 2002, Boeuf–Garrigues); off when �
         T_eff = max(T_loc, 0.0)
         ν_m0 / (T_eff^(3 / 2) + T_FLOOR^(3 / 2))
     end
-    ν_anom = alpha_B * ε * abs(H_loc) / max(me, eps())
+    ν_anom = xi_sq * alpha_B * ε * abs(H_loc) / max(me, eps())
     return ν_base + ν_anom
 end
 
 @inline local_nu_m(ν_m0::Float64, T_loc::Float64, model::Symbol = :spitzer) =
-    local_nu_m(ν_m0, T_loc, model, 0.0, 0.0, 0.0, 1.0)
+    local_nu_m(ν_m0, T_loc, model, 0.0, 0.0, 0.0, 1.0, 1.0)
 """
     neutrals_evolution(n_a_new, n_a_old, n_ion, τ, v_a, kI, h, n_source)
 
@@ -348,8 +355,11 @@ with
 
 `n_safe = n + max(n_reg_min, N_FLOOR)` regularises the Joule heating denominator.
 The result is clamped to `[T_FLOOR, T_cap]`. Boundary nodes are set by Neumann
-copy from interior. Optional `H_total` (with `alpha_B`, `ε`, `me`) feeds the
-Bohm-anomaly contribution to `ν_m`.
+copy from interior. Optional `H_total` (with `alpha_B`, `ε`, `me`, `xi_sq`) feeds the
+Bohm-anomaly contribution to `ν_m`; `xi_sq = ξ²` converts the Hagelaar–Bœuf collision
+frequency `α_B ω_ce` to the magnetic-diffusivity convention used by `ν_m0` (see
+`local_nu_m`). Default `xi_sq = 1.0` keeps the legacy collision-frequency convention for
+stand-alone callers.
 """
 function intermediate_temperature(
     T_new::Vector{Float64},
@@ -371,6 +381,7 @@ function intermediate_temperature(
     alpha_B::Float64 = 0.0,
     ε::Float64 = 0.0,
     H_total::Union{Nothing, AbstractVector{Float64}} = nothing,
+    xi_sq::Float64 = 1.0,
 )
     M = length(T_old) - 1
     mΣ = mi + me
@@ -378,7 +389,7 @@ function intermediate_temperature(
         T_loc = max(T_old[i], 0.0)
         n_loc = n[i] + (n_reg_min === nothing ? N_FLOOR : max(n_reg_min[i], N_FLOOR))
         H_loc = H_total === nothing ? 0.0 : H_star_channel_nonneg(H_total[i])
-        ν_m = local_nu_m(ν_m0, T_loc, collision_model, H_loc, alpha_B, ε, me)
+        ν_m = local_nu_m(ν_m0, T_loc, collision_model, H_loc, alpha_B, ε, me, xi_sq)
         vz_im1 = i == 2 ? (2 * vz[1] - vz[2]) : vz[i - 1]
         vz_ip1 = i == M ? (2 * vz[M + 1] - vz[M]) : vz[i + 1]
         dvz = (vz_ip1 - vz_im1) / (2h)
@@ -433,6 +444,10 @@ In-place variant; `workspace` is a NamedTuple with the scratch fields
 `(H_interp, H_star, a, b, c, d, cp, dp)` (each at least length `M+1` /
 `M-1` for the `cp`, `dp` Thomas buffers). Reusing these across solver
 steps removes the per-call allocations of the original implementation.
+
+Collision keyword arguments `(collision_model, alpha_B, ε, me, xi_sq)` are forwarded
+to [`local_nu_m`](@ref); pass `xi_sq = ξ²` so that the Bohm-anomaly contribution to
+`ν_m` matches the magnetic-diffusivity convention of `ν_m0` (see `local_nu_m`).
 """
 function electric_field_solver!(
     E_y::Vector{Float64},
@@ -455,6 +470,7 @@ function electric_field_solver!(
     alpha_B::Float64 = 0.0,
     ε::Float64 = 0.0,
     me::Float64 = 1.0,
+    xi_sq::Float64 = 1.0,
     H_ext_at_nodes::Union{Nothing, AbstractVector{Float64}} = nothing,
     advance_induced_H::Bool = false,
     apply_faraday::Bool = true,
@@ -497,7 +513,7 @@ function electric_field_solver!(
     @inbounds for i in 2:M
         n_loc = n[i] + (n_reg_min === nothing ? N_FLOOR : max(n_reg_min[i], N_FLOOR))
         T_loc = max(T[i], 0.0)
-        ν_m = local_nu_m(ν_m0, T_loc, collision_model, H_star[i], alpha_B, ε, me)
+        ν_m = local_nu_m(ν_m0, T_loc, collision_model, H_star[i], alpha_B, ε, me, xi_sq)
         # Semi-implicit scheme (36), p.35: j^{1/2} = j^0 + (τ/(2h²))(E_{k+1}-2E_k+E_{k-1}),
         # H^{1/2}_* = H^0_* + (τ/(4h))(E_{k+1}-E_{k-1}); coefficients B,C,D follow.
         A = α / (n_loc * h^2)

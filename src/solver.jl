@@ -586,6 +586,11 @@ function run_simulation(
     c_inv = params.c_inv
     H0_func = params.H0_func
     N1 = params.N1
+    # Paper §2 closure: ν_m0 is the magnetic-viscosity prefactor (`c²/(4π σ_0 [T]^{3/2} [L][v])`),
+    # while the Bohm anomaly enters `local_nu_m` as `α_B ω_ce` (a collision frequency). Convert
+    # the latter to the same magnetic-diffusivity convention by multiplying by `ξ² = (c/ω_pe/L)²`.
+    # `α = λ_i/λ_Σ · ξ²` is already stored, so `ξ² = α / (1 - λ_e/λ_Σ)`.
+    ξ_sq = α / max(1.0 - params.λ_e_λΣ, eps())
     x_grid = range(0, L, length = M + 1)
     x_half = range(h / 2, L - h / 2, length = M)
     Hext_dim_max_pre = maximum(abs.(H0_func.(collect(x_grid))))
@@ -724,7 +729,7 @@ function run_simulation(
         @. H_total_work = PlasmaDynamics.H_star_channel_nonneg(H_nodes_work + H_ext_buf)
         @. ν_m_work = PlasmaDynamics.local_nu_m(
             ν_m0, T_e, params.collision_model, H_total_work,
-            params.alpha_B, params.ε, params.me,
+            params.alpha_B, params.ε, params.me, ξ_sq,
         )
         ν_max = maximum(ν_m_work)
         # Single pass over interior nodes for the Hall-whistler speed `v_H = α0 |H_*|/(n c)`.
@@ -771,7 +776,8 @@ function run_simulation(
         intermediate_temperature(T_tilde_buf, T_e, n_ion, v_iz, j, n_a_old, τ, γ, mi, me, ν_m0, kI_eff, h;
             n_reg_min = n_reg_min, T_cap = T_cap,
             collision_model = params.collision_model,
-            alpha_B = params.alpha_B, ε = params.ε, H_total = H_total_work)
+            alpha_B = params.alpha_B, ε = params.ε, H_total = H_total_work,
+            xi_sq = ξ_sq)
         T_e .= T_tilde_buf
         for p in particles
             p.active || continue
@@ -783,7 +789,7 @@ function run_simulation(
             electric_field_solver!(E_y, H_x_half, j, n_ion, v_iz, T_e, τ, α, ν_m0, h, x_grid, H0_func, :j0, v_a, c_inv;
                 n_reg_min = n_reg_min,
                 collision_model = params.collision_model,
-                alpha_B = params.alpha_B, ε = params.ε, me = params.me,
+                alpha_B = params.alpha_B, ε = params.ε, me = params.me, xi_sq = ξ_sq,
                 H_ext_at_nodes = H_ext_buf, advance_induced_H = acc_ind, apply_faraday = false,
                 workspace = ws_efs)
             compute_Ez!(E_z, H_x_half, H_x_half, j, j, n_ion, T_e, v_iy, n_a_new, n_a_new, α0, ζ, kI_eff, v_a, h, params.λ_e_λΣ, β_Ez_coef, c_inv, τ, x_grid, H0_func, n_floor_physical;
@@ -809,7 +815,7 @@ function run_simulation(
         @. H_total_work = PlasmaDynamics.H_star_channel_nonneg(H_nodes_work + H_ext_buf)
         @. ν_m_work = PlasmaDynamics.local_nu_m(
             ν_m0, T_e, params.collision_model, H_total_work,
-            params.alpha_B, params.ε, params.me,
+            params.alpha_B, params.ε, params.me, ξ_sq,
         )
         thrust_step = move_particles(particles, E_y, E_z, H_x_half, j, ν_m_work, x_grid, x_half, τ, h, ε, mi, c_inv, H_ext_buf, counters)
         if mode === :case2
@@ -835,7 +841,7 @@ function run_simulation(
         @. H_total_work = PlasmaDynamics.H_star_channel_nonneg(H_nodes_work + H_ext_buf)
         @. ν_m_work = PlasmaDynamics.local_nu_m(
             ν_m0, T_e, params.collision_model, H_total_work,
-            params.alpha_B, params.ε, params.me,
+            params.alpha_B, params.ε, params.me, ξ_sq,
         )
         beta_e_buf .= DiagnosticsMetrics.hall_parameter_electron.(Ref(params), H_total_work, ν_m_work)
         push!(thrust_time, t + τ)

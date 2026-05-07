@@ -22,9 +22,11 @@ This README summarizes the **physics**, the **effective “chemistry”** (sourc
 
 Electrons are treated as a **conducting fluid** with:
 
-- **Resistivity / collision frequency** modeled as proportional to **ν_e / n** with **ν_e** from:
-  - **Spitzer** scaling **ν_m ∝ ν_{m0}/T_e^{3/2}** with a floor on **T**, or
-  - **Constant** effective **ν_e ≈ const** (anomalous plateau).
+- **Resistivity** built from the paper §2 dimensionless **magnetic viscosity**
+  **ν_m = c²/(4π σ [L][v]) = ν_{m0}/T_e^{3/2}** (Spitzer prefactor
+  **ν_{m0} = c²/(4π σ_0 [T]^{3/2} [L][v])**) with **ν_e** from:
+  - **Spitzer** scaling **ν_m = ν_{m0}/T_e^{3/2}** with a floor on **T**, or
+  - **Constant** effective **ν_m ≈ ν_{m0}** (anomalous plateau).
 - Optional **Bohm-type anomalous scattering** **∝ α_B · ω_ce** on top of the base model (parameter **α_B**; Hagelaar / Boeuf–Garrigues style references appear in comments).
 - **Ohm’s law in the Hall direction** yields an **elliptic boundary-value problem for E_y** coupled to **j_y**, **v_z**, and **H_*** (system (36) in the manuscript, semi-implicit discretization in code).
 - **Axial electric field E_z** from an **algebraic closure (38)**: balance of drift, ionization contribution, Hall current correction, and pressure-gradient term projected on **z** (stored as four diagnostic arrays).
