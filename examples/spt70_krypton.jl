@@ -57,7 +57,7 @@ const N_A_LEFT_DIMLESS = 10.0
 # - N1 = 50 initial macroparticles per cell (5000 total): ionization grows the count by 10-50×
 #   over one transit time, so additional initial seeding is wasted; moments are dominated by
 #   ionized particles after t ≈ 1 t_char.
-const M_GRID = 100
+const M_GRID = 30
 const N1_MAC = 50
 
 params, groups = PaperScales.sim_params_from_si_scales(
@@ -97,7 +97,7 @@ println(
 # - Ion transit time at U_discharge=250 V: t_transit ≈ L / sqrt(2eU/m_i) ≈ 1.7 μs ≈ 4.2 t_char.
 # - Steady state typically reached after 5-8 transit times → T_END ≈ 30 is sufficient and ~3× cheaper
 #   than T_END = 100 (no further physics is captured beyond the steady state).
-const T_END  = 30.0
+const T_END  = 3.0
 const FIGDIR = joinpath(ROOT, "output", "figures", "spt70_krypton")
 
 CoreSolver.run_simulation(
@@ -106,7 +106,7 @@ CoreSolver.run_simulation(
     accumulate_induced_H = false,
     total_time = T_END,
     # Snapshots from the last third of the run to inspect statistical steady state.
-    save_times = [T_END*0.7, T_END*0.85, T_END],
+    save_times = [T_END*0.85, T_END*0.9, T_END],
     do_plot = true,
     plot_output_dir = FIGDIR,
     si_plot_scales = scales_SI,

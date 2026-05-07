@@ -641,13 +641,41 @@ function run_simulation(
     n_vy_buf = zeros(M + 1)
     n_vz_buf = zeros(M + 1)
     n_T_buf = zeros(M + 1)
-    # Cached H_ext on nodes: one evaluation of H0_func per step (avoids repeating H0_func.(x_grid)).
+    # H_ext at nodes is fully determined by `H0_func` and `x_grid`, both fixed for the whole
+    # run; evaluate once before the time loop and reuse the result everywhere (Ohm/E_z solves,
+    # particle push, snapshots, diagnostics).
     H_ext_buf = zeros(M + 1)
+    @inbounds for i in 1:(M + 1)
+        H_ext_buf[i] = H0_func(x_grid[i])
+    end
     H_nodes_work = zeros(M + 1)
     H_total_work = zeros(M + 1)
     T_tilde_buf = similar(T_e)
     ν_m_work = zeros(M + 1)
     beta_e_buf = zeros(M + 1)
+    n_a_new = zeros(M + 1)
+    n_reg_min = zeros(M + 1)
+    # Workspaces for the in-place EMHD solvers; sizes pinned to M+1 (Thomas scratch is sized
+    # for the M-1 interior unknowns of `electric_field_solver!`).
+    ws_efs = (
+        H_interp = zeros(M + 1),
+        H_star = zeros(M + 1),
+        a = zeros(M + 1),
+        b = zeros(M + 1),
+        c = zeros(M + 1),
+        d = zeros(M + 1),
+        cp = zeros(max(M, 1)),
+        dp = zeros(max(M, 1)),
+    )
+    ws_ez = (
+        H_interp = zeros(M + 1),
+        H_star = zeros(M + 1),
+        nT = zeros(M + 1),
+        vy_sm = zeros(M + 1),
+        d_nT = zeros(M + 1),
+        n_safe = zeros(M + 1),
+        steklov_buf = zeros(M + 1),
+    )
     tau_constraint_hits = Dict{Symbol, Int}(:total_time => 0)
     for k in active_tau_constraints
         tau_constraint_hits[k] = 0
@@ -683,11 +711,10 @@ function run_simulation(
         _steklov_dispatch!(v_iy, steklov_pic_half_width, steklov_pic_passes, steklov_pic_boundary)
         _steklov_dispatch!(v_iz, steklov_pic_half_width, steklov_pic_passes, steklov_pic_boundary)
         _steklov_dispatch!(T_e, steklov_pic_half_width, steklov_pic_passes, steklov_pic_boundary)
-        n_reg_min = max.(0.01 .* n_a_old, n_floor_physical)
-        max_vz = max(maximum(abs, v_iz), 1e-12)
         @inbounds for i in 1:(M + 1)
-            H_ext_buf[i] = H0_func(x_grid[i])
+            n_reg_min[i] = max(0.01 * n_a_old[i], n_floor_physical)
         end
+        max_vz = max(maximum(abs, v_iz), 1e-12)
         # Total magnetic channel field: H_* = H_ind + H_ext at nodes (`H_star_channel_nonneg` sums without clipping).
         H_nodes_work[1] = H_x_half[1]
         for i in 2:M
@@ -751,16 +778,17 @@ function run_simulation(
             k0, k1, w0, w1 = interpolation_weights(p.z, x_grid)
             p.T = w0 * T_tilde_buf[k0] + w1 * T_tilde_buf[k1]
         end
-        n_a_new = similar(n_a_old)
         neutrals_evolution(n_a_new, n_a_old, n_ion, τ, v_a, kI_eff, h, n_a_left)
         if mode === :case2
-            E_y, H_x_half, j = electric_field_solver(E_y, H_x_half, j, n_ion, v_iz, T_e, τ, α, ν_m0, h, x_grid, H0_func, :j0, v_a, c_inv;
+            electric_field_solver!(E_y, H_x_half, j, n_ion, v_iz, T_e, τ, α, ν_m0, h, x_grid, H0_func, :j0, v_a, c_inv;
                 n_reg_min = n_reg_min,
                 collision_model = params.collision_model,
                 alpha_B = params.alpha_B, ε = params.ε, me = params.me,
-                H_ext_at_nodes = H_ext_buf, advance_induced_H = acc_ind, apply_faraday = false)
-            compute_Ez(E_z, H_x_half, H_x_half, j, j, n_ion, T_e, v_iy, n_a_new, n_a_new, α0, ζ, kI_eff, v_a, h, params.λ_e_λΣ, β_Ez_coef, c_inv, τ, x_grid, H0_func, n_floor_physical;
-                Ez_term1 = E_z_term1, Ez_term2 = E_z_term2, Ez_term3 = E_z_term3, Ez_term4 = E_z_term4, H_ext_at_nodes = H_ext_buf)
+                H_ext_at_nodes = H_ext_buf, advance_induced_H = acc_ind, apply_faraday = false,
+                workspace = ws_efs)
+            compute_Ez!(E_z, H_x_half, H_x_half, j, j, n_ion, T_e, v_iy, n_a_new, n_a_new, α0, ζ, kI_eff, v_a, h, params.λ_e_λΣ, β_Ez_coef, c_inv, τ, x_grid, H0_func, n_floor_physical;
+                Ez_term1 = E_z_term1, Ez_term2 = E_z_term2, Ez_term3 = E_z_term3, Ez_term4 = E_z_term4,
+                H_ext_at_nodes = H_ext_buf, workspace = ws_ez)
             E_z .+= E0_dimless
         else
             fill!(E_y, 0.0)
@@ -783,7 +811,7 @@ function run_simulation(
             ν_m0, T_e, params.collision_model, H_total_work,
             params.alpha_B, params.ε, params.me,
         )
-        thrust_step = move_particles(particles, E_y, E_y, E_z, E_z, H_x_half, H_x_half, j, j, ν_m_work, ν_m_work, x_grid, x_half, τ, h, ε, mi, c_inv, H0_func, counters)
+        thrust_step = move_particles(particles, E_y, E_z, H_x_half, j, ν_m_work, x_grid, x_half, τ, h, ε, mi, c_inv, H_ext_buf, counters)
         if mode === :case2
             if acc_ind
                 @inbounds for i in 1:M

@@ -2,7 +2,49 @@ using LinearAlgebra
 
 module NumericalFunctionsSPT
 
-export solve_tridiagonal, interpolation_weights, smooth_field, Steklov_smooth, Steklov_smooth_clamped
+export solve_tridiagonal, solve_tridiagonal!, interpolation_weights, smooth_field,
+    Steklov_smooth, Steklov_smooth!, Steklov_smooth_clamped
+
+"""
+    solve_tridiagonal!(x, a, b, c, d, cp, dp) -> x
+
+Mutating Thomas sweep over the same system as [`solve_tridiagonal`](@ref):
+
+    b[1] x[1] +   c[1] x[2]                    = d[1]
+    a[i-1] x[i-1] + b[i] x[i] + c[i] x[i+1]    = d[i],  2 ≤ i ≤ n-1
+                                a[n-1] x[n-1] + b[n] x[n] = d[n]
+
+Output `x` (length `n`) is written in place. `cp` and `dp` are caller-supplied scratch
+buffers (length ≥ `n - 1`); reusing them across calls eliminates per-step allocations
+inside the hot loop. No pivoting (matrix is diagonally dominant by construction).
+"""
+function solve_tridiagonal!(
+    x::AbstractVector{Float64},
+    a::AbstractVector{Float64},
+    b::AbstractVector{Float64},
+    c::AbstractVector{Float64},
+    d::AbstractVector{Float64},
+    cp::AbstractVector{Float64},
+    dp::AbstractVector{Float64},
+)
+    n = length(b)
+    @assert length(x) == n && length(a) == n - 1 && length(c) == n - 1 && length(d) == n
+    @assert length(cp) >= n - 1 && length(dp) >= n - 1
+    @inbounds begin
+        cp[1] = c[1] / b[1]
+        dp[1] = d[1] / b[1]
+        for i in 2:(n - 1)
+            denom = b[i] - a[i - 1] * cp[i - 1]
+            cp[i] = c[i] / denom
+            dp[i] = (d[i] - a[i - 1] * dp[i - 1]) / denom
+        end
+        x[n] = (d[n] - a[n - 1] * dp[n - 1]) / (b[n] - a[n - 1] * cp[n - 1])
+        for i in (n - 1):-1:1
+            x[i] = dp[i] - cp[i] * x[i + 1]
+        end
+    end
+    return x
+end
 
 """
     solve_tridiagonal(a, b, c, d) -> Vector{Float64}
@@ -17,6 +59,9 @@ Inputs are checked: `length(a) == length(c) == n - 1`, `length(b) == length(d) =
 
 `O(n)` operations, no pivoting (the elliptic `E_y` matrix in
 `PlasmaDynamics.electric_field_solver` is diagonally dominant by construction).
+
+Allocating wrapper around [`solve_tridiagonal!`](@ref); use the in-place variant
+to avoid temporaries in tight loops.
 """
 function solve_tridiagonal(
     a::AbstractVector{Float64},
@@ -28,19 +73,8 @@ function solve_tridiagonal(
     @assert length(a) == n - 1 && length(c) == n - 1 && length(d) == n
     cp = similar(c)
     dp = similar(d)
-    cp[1] = c[1] / b[1]
-    dp[1] = d[1] / b[1]
-    for i in 2:(n - 1)
-        denom = b[i] - a[i - 1] * cp[i - 1]
-        cp[i] = c[i] / denom
-        dp[i] = (d[i] - a[i - 1] * dp[i - 1]) / denom
-    end
     x = zeros(n)
-    x[n] = (d[n] - a[n - 1] * dp[n - 1]) / (b[n] - a[n - 1] * cp[n - 1])
-    for i in (n - 1):-1:1
-        x[i] = dp[i] - cp[i] * x[i + 1]
-    end
-    return x
+    return solve_tridiagonal!(x, a, b, c, d, cp, dp)
 end
 
 """
@@ -99,24 +133,23 @@ function smooth_field(f::AbstractVector{Float64}, window::Int)
 end
 
 """
-Steklov smoothing (formula (43); Gavrikov–Tauyrsky-style preprint, 2021):
-  f̂(z) = 1/(2η) ∫_{z-η}^{z+η} f̃(x) dx,  0 ≤ z ≤ L,
-where f̃ is the even extension of f to [-L,L] then 2L-periodic continuation.
-On a grid with spacing h and η = r·h this is a uniform box average over `2r+1` nodes
-with reflected indices at boundaries.
+    Steklov_smooth!(f, buf, radius=1, passes=5; boundary=:reflect) -> f
 
-`radius`: half-window in mesh points (default 1, i.e. η = h).
-`passes`: successive applications (paper recommends 5).
+Mutating variant of [`Steklov_smooth`](@ref). `buf` is a caller-supplied scratch
+vector with `length(buf) == length(f)`; reusing it across calls eliminates
+per-step allocations. The result is always written back into `f` (the function
+internally ping-pongs between `f` and `buf` to skip an extra copy).
 """
-function Steklov_smooth(
+function Steklov_smooth!(
     f::AbstractVector{Float64},
+    buf::AbstractVector{Float64},
     radius::Int = 1,
     passes::Int = 5;
     boundary::Symbol = :reflect,
 )
     n = length(f)
+    @assert length(buf) == n
     radius = max(radius, 1)
-    buf = similar(f)
     src = f
     dst = buf
     for _ in 1:passes
@@ -145,6 +178,29 @@ function Steklov_smooth(
         copyto!(f, src)
     end
     return f
+end
+
+"""
+Steklov smoothing (formula (43); Gavrikov–Tauyrsky-style preprint, 2021):
+  f̂(z) = 1/(2η) ∫_{z-η}^{z+η} f̃(x) dx,  0 ≤ z ≤ L,
+where f̃ is the even extension of f to [-L,L] then 2L-periodic continuation.
+On a grid with spacing h and η = r·h this is a uniform box average over `2r+1` nodes
+with reflected indices at boundaries.
+
+`radius`: half-window in mesh points (default 1, i.e. η = h).
+`passes`: successive applications (paper recommends 5).
+
+Allocating wrapper around [`Steklov_smooth!`](@ref); use the in-place variant
+to avoid per-call temporaries in tight loops.
+"""
+function Steklov_smooth(
+    f::AbstractVector{Float64},
+    radius::Int = 1,
+    passes::Int = 5;
+    boundary::Symbol = :reflect,
+)
+    buf = similar(f)
+    return Steklov_smooth!(f, buf, radius, passes; boundary = boundary)
 end
 
 """

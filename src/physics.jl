@@ -258,7 +258,8 @@ using ..PartCount
 using ..NumericalFunctionsSPT
 
 export neutrals_evolution, intermediate_temperature, intermidiate_temperature,
-    compute_current, electric_field_solver, compute_Ez, local_nu_m, H_star_channel_nonneg
+    compute_current, electric_field_solver, electric_field_solver!,
+    compute_Ez, compute_Ez!, local_nu_m, H_star_channel_nonneg
 
 const N_FLOOR = 1e-8
 # Floor on T for ν_m = ν_{m0}/T^{3/2} (paper sec. 3, rec. 1).
@@ -427,8 +428,13 @@ advance particles at one time level and apply Faraday after the particle push us
 Closure uses sum of interpolated induced and external field at nodes.
 
 External field via `H_ext_at_nodes` or `H0_func.(x_grid)`.
+
+In-place variant; `workspace` is a NamedTuple with the scratch fields
+`(H_interp, H_star, a, b, c, d, cp, dp)` (each at least length `M+1` /
+`M-1` for the `cp`, `dp` Thomas buffers). Reusing these across solver
+steps removes the per-call allocations of the original implementation.
 """
-function electric_field_solver(
+function electric_field_solver!(
     E_y::Vector{Float64},
     H_x_old::Vector{Float64},
     j_old::Vector{Float64},
@@ -452,6 +458,7 @@ function electric_field_solver(
     H_ext_at_nodes::Union{Nothing, AbstractVector{Float64}} = nothing,
     advance_induced_H::Bool = false,
     apply_faraday::Bool = true,
+    workspace::NamedTuple,
 )
     M = length(H_x_old)
     @assert length(E_y) == M + 1
@@ -459,23 +466,35 @@ function electric_field_solver(
     @assert length(n) == M + 1
     @assert length(vz) == M + 1
     @assert length(T) == M + 1
-    H_interpolated = zeros(M + 1)
-    H_interpolated[1] = H_x_old[1]
-    for i in 2:M
+    H_interpolated = workspace.H_interp
+    H_star = workspace.H_star
+    a = workspace.a
+    b = workspace.b
+    c = workspace.c
+    d = workspace.d
+    cp = workspace.cp
+    dp = workspace.dp
+    @assert length(H_interpolated) >= M + 1
+    @assert length(H_star) >= M + 1
+    @assert length(a) >= M + 1 && length(b) >= M + 1
+    @assert length(c) >= M + 1 && length(d) >= M + 1
+    @assert length(cp) >= max(M - 1, 0) && length(dp) >= max(M - 1, 0)
+    @inbounds H_interpolated[1] = H_x_old[1]
+    @inbounds for i in 2:M
         H_interpolated[i] = (H_x_old[i - 1] + H_x_old[i]) / 2
     end
-    H_interpolated[M + 1] = H_x_old[M]
+    @inbounds H_interpolated[M + 1] = H_x_old[M]
     if H_ext_at_nodes === nothing
-        H_star = H_star_channel_nonneg.(H_interpolated .+ H0_func.(x_grid))
+        @inbounds for i in 1:(M + 1)
+            H_star[i] = H_star_channel_nonneg(H_interpolated[i] + H0_func(x_grid[i]))
+        end
     else
         @assert length(H_ext_at_nodes) == M + 1
-        H_star = H_star_channel_nonneg.(H_interpolated .+ H_ext_at_nodes)
+        @inbounds for i in 1:(M + 1)
+            H_star[i] = H_star_channel_nonneg(H_interpolated[i] + H_ext_at_nodes[i])
+        end
     end
-    a = zeros(M + 1)
-    b = zeros(M + 1)
-    c = zeros(M + 1)
-    d = zeros(M + 1)
-    for i in 2:M
+    @inbounds for i in 2:M
         n_loc = n[i] + (n_reg_min === nothing ? N_FLOOR : max(n_reg_min[i], N_FLOOR))
         T_loc = max(T[i], 0.0)
         ν_m = local_nu_m(ν_m0, T_loc, collision_model, H_star[i], alpha_B, ε, me)
@@ -512,20 +531,62 @@ function electric_field_solver(
         error("Unsupported boundary condition: $bc_type")
     end
     if M - 1 > 0
-        E_inner = solve_tridiagonal(view(a, 3:M), view(b, 2:M), view(c, 2:(M - 1)), view(d, 2:M))
-        E_y[2:M] .= E_inner
+        solve_tridiagonal!(
+            view(E_y, 2:M),
+            view(a, 3:M), view(b, 2:M), view(c, 2:(M - 1)), view(d, 2:M),
+            cp, dp,
+        )
     end
     if !apply_faraday
         return E_y, H_x_old, j_old
     end
     H_x_new = similar(H_x_old)
-    for i in 1:M
+    @inbounds for i in 1:M
         d_faraday = τ * (E_y[i + 1] - E_y[i]) / h
         H_x_new[i] = advance_induced_H ? H_x_old[i] + d_faraday : d_faraday
     end
     j_new = zeros(M + 1)
     compute_current(j_new, H_x_new, h)
     return E_y, H_x_new, j_new
+end
+
+"""
+Allocating wrapper around [`electric_field_solver!`](@ref) — keeps the legacy
+non-mutating signature for callers that do not care about per-step allocations.
+"""
+function electric_field_solver(
+    E_y::Vector{Float64},
+    H_x_old::Vector{Float64},
+    j_old::Vector{Float64},
+    n::Vector{Float64},
+    vz::Vector{Float64},
+    T::Vector{Float64},
+    τ::Float64,
+    α::Float64,
+    ν_m0::Float64,
+    h::Float64,
+    x_grid::AbstractVector{Float64},
+    H0_func,
+    bc_type::Symbol,
+    v_a::Float64,
+    c_inv::Float64;
+    kwargs...,
+)
+    M = length(H_x_old)
+    workspace = (
+        H_interp = zeros(M + 1),
+        H_star = zeros(M + 1),
+        a = zeros(M + 1),
+        b = zeros(M + 1),
+        c = zeros(M + 1),
+        d = zeros(M + 1),
+        cp = zeros(max(M, 1)),
+        dp = zeros(max(M, 1)),
+    )
+    return electric_field_solver!(
+        E_y, H_x_old, j_old, n, vz, T, τ, α, ν_m0, h, x_grid, H0_func, bc_type, v_a, c_inv;
+        workspace = workspace, kwargs...,
+    )
 end
 
 """
@@ -550,7 +611,7 @@ Implementation notes:
 - `H_*` at nodes uses interpolation from half-nodes plus `H_ext_at_nodes` (or `H0_func`).
 - Non-finite `Ez[i]` are reset to 0 to keep downstream PIC pushers stable.
 """
-function compute_Ez(
+function compute_Ez!(
     Ez::Vector{Float64},
     H_x_old::Vector{Float64},
     H_x_new::Vector{Float64},
@@ -578,68 +639,140 @@ function compute_Ez(
     Ez_term3::Union{Nothing, Vector{Float64}} = nothing,
     Ez_term4::Union{Nothing, Vector{Float64}} = nothing,
     H_ext_at_nodes::Union{Nothing, AbstractVector{Float64}} = nothing,
+    workspace::NamedTuple,
 )
     M = length(H_x_old)
     @assert length(Ez) == M + 1
+    H_interpolation = workspace.H_interp
+    H_star = workspace.H_star
+    nT = workspace.nT
+    vy_sm = workspace.vy_sm
+    d_nT = workspace.d_nT
+    n_safe = workspace.n_safe
+    steklov_buf = workspace.steklov_buf
+    @assert length(H_interpolation) == M + 1
+    @assert length(H_star) == M + 1
+    @assert length(nT) == M + 1
+    @assert length(vy_sm) == M + 1
+    @assert length(d_nT) == M + 1
+    @assert length(n_safe) == M + 1
+    @assert length(steklov_buf) == M + 1
     same_hj = H_x_old === H_x_new && j_old === j_new
     same_na = n_a_new === n_a_old
-    if !same_hj
-        H_x_mid = 0.5 .* (H_x_new .+ H_x_old)
-        j_mid = 0.5 .* (j_new .+ j_old)
-    end
-    H_interpolation = zeros(M + 1)
     if same_hj
         hx = H_x_old
         j_src = j_old
     else
-        hx = H_x_mid
-        j_src = j_mid
+        # Rare two-layer call: small temporaries on this slow path are acceptable.
+        hx = 0.5 .* (H_x_new .+ H_x_old)
+        j_src = 0.5 .* (j_new .+ j_old)
     end
-    H_interpolation[1] = hx[1]
-    for i in 2:M
+    @inbounds H_interpolation[1] = hx[1]
+    @inbounds for i in 2:M
         H_interpolation[i] = (hx[i] + hx[i - 1]) / 2
     end
-    H_interpolation[M + 1] = hx[M]
+    @inbounds H_interpolation[M + 1] = hx[M]
     if H_ext_at_nodes === nothing
-        H_star = H_star_channel_nonneg.(H_interpolation .+ H0_func.(x_grid))
+        @inbounds for i in 1:(M + 1)
+            H_star[i] = H_star_channel_nonneg(H_interpolation[i] + H0_func(x_grid[i]))
+        end
     else
         @assert length(H_ext_at_nodes) == M + 1
-        H_star = H_star_channel_nonneg.(H_interpolation .+ H_ext_at_nodes)
+        @inbounds for i in 1:(M + 1)
+            H_star[i] = H_star_channel_nonneg(H_interpolation[i] + H_ext_at_nodes[i])
+        end
     end
     # Eq. (38): E_z = H_*·v_{iy} − …; Steklov (43) on PIC moments (n·T), v_iy only — do not smooth j (Hall source).
-    nT = n .* T
-    Steklov_smooth(nT, 1, 5)
-    vy_sm = copy(vy)
-    Steklov_smooth(vy_sm, 1, 5)
-    d_nT = zeros(M + 1)
-    for i in 2:M
+    @inbounds for i in 1:(M + 1)
+        nT[i] = n[i] * T[i]
+    end
+    Steklov_smooth!(nT, steklov_buf, 1, 5)
+    @inbounds for i in 1:(M + 1)
+        vy_sm[i] = vy[i]
+    end
+    Steklov_smooth!(vy_sm, steklov_buf, 1, 5)
+    @inbounds for i in 2:M
         d_nT[i] = (nT[i + 1] - nT[i - 1]) / (2h)
     end
     d_nT[1] = (nT[2] - (2 * nT[1] - nT[2])) / (2h)
     d_nT[M + 1] = ((2 * nT[M + 1] - nT[M]) - nT[M - 1]) / (2h)
-    n_safe = max.(n, 0.0) .+ n_floor
-    term1_arr = zeros(M + 1)
-    term2_arr = zeros(M + 1)
-    term3_arr = zeros(M + 1)
-    term4_arr = zeros(M + 1)
-    for i in 1:(M + 1)
+    @inbounds for i in 1:(M + 1)
+        n_safe[i] = max(n[i], 0.0) + n_floor
+    end
+    # Reuse caller-supplied diagnostic term arrays as the staging buffers when present;
+    # otherwise allocate scratch (unusual path: full diagnostics are wired up by the driver).
+    use_caller_terms = Ez_term1 !== nothing && Ez_term2 !== nothing &&
+        Ez_term3 !== nothing && Ez_term4 !== nothing
+    term1_arr = use_caller_terms ? Ez_term1 : zeros(M + 1)
+    term2_arr = use_caller_terms ? Ez_term2 : zeros(M + 1)
+    term3_arr = use_caller_terms ? Ez_term3 : zeros(M + 1)
+    term4_arr = use_caller_terms ? Ez_term4 : zeros(M + 1)
+    @inbounds for i in 1:(M + 1)
         n_a_mid = same_na ? n_a_new[i] : 0.5 * (n_a_new[i] + n_a_old[i])
         term1_arr[i] = H_star[i] * vy_sm[i] * c_inv
         term2_arr[i] = β_Ez_coef * kI * n_a_mid * va
         term3_arr[i] = (α0 / n_safe[i]) * H_star[i] * j_src[i]
         term4_arr[i] = (ζ * α0 / n_safe[i]) * d_nT[i]
     end
-    Ez .= term1_arr .- term2_arr .- term3_arr .- term4_arr
-    for i in 1:(M + 1)
+    @inbounds for i in 1:(M + 1)
+        Ez[i] = term1_arr[i] - term2_arr[i] - term3_arr[i] - term4_arr[i]
         if !isfinite(Ez[i])
             Ez[i] = 0.0
         end
     end
-    Ez_term1 !== nothing && (Ez_term1 .= term1_arr)
-    Ez_term2 !== nothing && (Ez_term2 .= term2_arr)
-    Ez_term3 !== nothing && (Ez_term3 .= term3_arr)
-    Ez_term4 !== nothing && (Ez_term4 .= term4_arr)
+    if !use_caller_terms
+        Ez_term1 !== nothing && (Ez_term1 .= term1_arr)
+        Ez_term2 !== nothing && (Ez_term2 .= term2_arr)
+        Ez_term3 !== nothing && (Ez_term3 .= term3_arr)
+        Ez_term4 !== nothing && (Ez_term4 .= term4_arr)
+    end
     return Ez
+end
+
+"""
+Allocating wrapper around [`compute_Ez!`](@ref) — keeps the legacy
+non-mutating signature for callers that do not care about per-step allocations.
+"""
+function compute_Ez(
+    Ez::Vector{Float64},
+    H_x_old::Vector{Float64},
+    H_x_new::Vector{Float64},
+    j_old::Vector{Float64},
+    j_new::Vector{Float64},
+    n::Vector{Float64},
+    T::Vector{Float64},
+    vy::Vector{Float64},
+    n_a_new::Vector{Float64},
+    n_a_old::Vector{Float64},
+    α0::Float64,
+    ζ::Float64,
+    kI::Float64,
+    va::Float64,
+    h::Float64,
+    λ_e_λΣ::Float64,
+    β_Ez_coef::Float64,
+    c_inv::Float64,
+    τ::Float64,
+    x_grid::AbstractVector{Float64},
+    H0_func,
+    n_floor::Float64 = N_FLOOR;
+    kwargs...,
+)
+    M = length(H_x_old)
+    workspace = (
+        H_interp = zeros(M + 1),
+        H_star = zeros(M + 1),
+        nT = zeros(M + 1),
+        vy_sm = zeros(M + 1),
+        d_nT = zeros(M + 1),
+        n_safe = zeros(M + 1),
+        steklov_buf = zeros(M + 1),
+    )
+    return compute_Ez!(
+        Ez, H_x_old, H_x_new, j_old, j_new, n, T, vy, n_a_new, n_a_old,
+        α0, ζ, kI, va, h, λ_e_λΣ, β_Ez_coef, c_inv, τ, x_grid, H0_func, n_floor;
+        workspace = workspace, kwargs...,
+    )
 end
 
 end
@@ -747,6 +880,111 @@ Returns `thrust_step` (raw axial momentum carried out at the right boundary).
 """
 function move_particles(
     particles::Vector{Particle},
+    E_y::Vector{Float64},
+    E_z::Vector{Float64},
+    H_x::Vector{Float64},
+    j::Vector{Float64},
+    ν_m::Vector{Float64},
+    x_grid::AbstractVector{Float64},
+    x_half::AbstractVector{Float64},
+    τ::Float64,
+    h::Float64,
+    ε::Float64,
+    mi::Float64,
+    c_inv::Float64,
+    H_ext_at_nodes::AbstractVector{Float64},
+    counters::Counters,
+)
+    thrust_step = 0.0
+    L = x_grid[end]
+    M = length(x_grid) - 1
+    @assert length(H_ext_at_nodes) == M + 1
+    @assert length(E_y) == M + 1
+    @assert length(E_z) == M + 1
+    @assert length(j) == M + 1
+    @assert length(ν_m) == M + 1
+    @assert length(H_x) == M
+    nh = length(x_half)
+    for p in particles
+        p.active || continue
+        z = p.z
+        vy = p.vy
+        vz = p.vz
+        v_abs = sqrt(vy^2 + vz^2)
+        N0 = max(1, ceil(Int, τ * v_abs / (0.25 * h)))
+        τ0 = τ / N0
+        for _ in 1:N0
+            if z < x_grid[1]
+                z = x_grid[1]
+                vz = abs(vz)
+            elseif z > x_grid[end]
+                z = x_grid[end]
+            end
+            k0, k1, w0, w1 = interpolation_weights(z, x_grid)
+            E_y_loc = w0 * E_y[k0] + w1 * E_y[k1]
+            E_z_loc = w0 * E_z[k0] + w1 * E_z[k1]
+            j_loc = w0 * j[k0] + w1 * j[k1]
+            ν_m_loc = w0 * ν_m[k0] + w1 * ν_m[k1]
+            # CIC-интерполяция внешнего H_ext с тех же CIC-весов, что и для E_y/E_z/j: убирает
+            # 10⁵–10⁶ вычислений `exp(...)` в H0_func за шаг. Поле на узлах (`H_ext_at_nodes`)
+            # совпадает с тем, что пользует `electric_field_solver!` / `compute_Ez!`, поэтому
+            # сборка H_* однородна по всему циклу. Невязка относительно аналитического
+            # `H0_func(z)` ~h²·max|H_ext''|; гауссиана гладкая, и сами E/j/H_ind на сетке тоже
+            # CIC-интерполируются — ошибки симметричны.
+            H_ext_loc = w0 * H_ext_at_nodes[k0] + w1 * H_ext_at_nodes[k1]
+            if z <= x_half[1]
+                kh = 1
+                wh = 1.0
+            elseif z >= x_half[end]
+                kh = nh
+                wh = 1.0
+            else
+                kh = floor(Int, (z - x_half[1]) / h) + 1
+                kh = clamp(kh, 1, nh - 1)
+                wh = (z - x_half[kh]) / h
+            end
+            H_loc = (kh < nh) ? (1 - wh) * H_x[kh] + wh * H_x[kh + 1] : H_x[kh]
+            H_star_loc = H_star_channel_nonneg(H_loc + H_ext_loc)
+            # Ion characteristics (system 11): ∂v_y/∂t = ε(E_y + H_* v_z/c − j·ν_m),
+            #                                  ∂v_z/∂t = ε(E_z − H_* v_y/c).
+            j_over_σ = j_loc * ν_m_loc
+            vy_pred = vy + 0.5 * τ0 * ε * (E_y_loc + H_star_loc * vz * c_inv - j_over_σ)
+            vz_pred = vz + 0.5 * τ0 * ε * (E_z_loc - H_star_loc * vy * c_inv)
+            vy_new = vy + τ0 * ε * (E_y_loc + H_star_loc * vz_pred * c_inv - j_loc * ν_m_loc)
+            vz_new = vz + τ0 * ε * (E_z_loc - H_star_loc * vy_pred * c_inv)
+            if !isfinite(vy_new) || !isfinite(vz_new)
+                counters.nan += 1
+                p.active = false
+                break
+            end
+            z_new = z + τ0 * (vz + vz_new) / 2
+            p.z = z_new
+            p.vy = vy_new
+            p.vz = vz_new
+            z, vy, vz = z_new, vy_new, vz_new
+        end
+        if p.z >= L
+            p.active = false
+            thrust_step += mi * p.q * max(p.vz, 0.0)
+            counters.exited_right += 1
+        elseif p.z <= 0.0
+            # Left wall: absorbed ion -> neutral reinjected via n_a boundary source.
+            p.active = false
+            counters.reflected_left += 1
+        end
+    end
+    return thrust_step
+end
+
+"""
+Legacy two-layer signature retained for backward compatibility. The driver now
+uses the single-layer method above (`E_y0 === E_y1`, etc., always held in the
+old call sites). When all paired arguments are aliased we forward to the fast
+path with `H_ext_at_nodes = H0_func.(x_grid)`; otherwise we fall back to the
+original time-linearly-interpolated push.
+"""
+function move_particles(
+    particles::Vector{Particle},
     E_y0::Vector{Float64},
     E_y1::Vector{Float64},
     E_z0::Vector{Float64},
@@ -767,6 +1005,14 @@ function move_particles(
     H0_func::Function,
     counters::Counters,
 )
+    if E_y0 === E_y1 && E_z0 === E_z1 && H_x0 === H_x1 &&
+       j0 === j1 && ν_m0_grid0 === ν_m0_grid1
+        H_ext_at_nodes = [H0_func(z) for z in x_grid]
+        return move_particles(
+            particles, E_y0, E_z0, H_x0, j0, ν_m0_grid0, x_grid, x_half,
+            τ, h, ε, mi, c_inv, H_ext_at_nodes, counters,
+        )
+    end
     thrust_step = 0.0
     L = x_grid[end]
     for p in particles
@@ -804,8 +1050,6 @@ function move_particles(
             H_next = (kh < length(x_half)) ? (1 - wh) * H_x1[kh] + wh * H_x1[kh + 1] : H_x1[kh]
             H_mid = (1 - t_mid_relative) * H_now + t_mid_relative * H_next
             H_star_mid = H_star_channel_nonneg(H_mid + H0_func(z))
-            # Ion characteristics (system 11): ∂v_y/∂t = ε(E_y + H_* v_z/c − j·ν_m),
-            #                                  ∂v_z/∂t = ε(E_z − H_* v_y/c).
             j_over_σ = j_mid * ν_m_mid
             vy_pred = vy + 0.5 * τ0 * ε * (E_y_mid + H_star_mid * vz * c_inv - j_over_σ)
             vz_pred = vz + 0.5 * τ0 * ε * (E_z_mid - H_star_mid * vy * c_inv)
@@ -827,7 +1071,6 @@ function move_particles(
             thrust_step += mi * p.q * max(p.vz, 0.0)
             counters.exited_right += 1
         elseif p.z <= 0.0
-            # Left wall: absorbed ion -> neutral reinjected via n_a boundary source.
             p.active = false
             counters.reflected_left += 1
         end
