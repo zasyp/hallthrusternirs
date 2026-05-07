@@ -115,7 +115,7 @@ CoreSolver.run_simulation(
     # Adaptive timestep: keep the four physical CFLs; relax the explicit Hall-whistler safety to 2.0
     # because the elliptic Ohm solve already treats the Hall part of the current semi-implicitly.
     tau_constraints = :full,
-    tau_hall_safety = 2.0,
+    tau_hall_safety = 10.0,
     log_tau_constraint = true,
 )
 
