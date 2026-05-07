@@ -50,15 +50,15 @@ const E0_DIMLESS = PaperScales.E0_dimless_from_discharge_voltage(
 v_pic0_dimless = PaperScales.v_pic0_dimless_from_ion_thermal(scales_SI, T_ION_EV)
 
 const ALPHA_B_ANOM = 0.0
-const N_A_LEFT_DIMLESS = 10.0
+const N_A_LEFT_DIMLESS = 50.0
 
 # Grid / PIC sizing for SPT-70 / Krypton at the SI scales above.
 # - h_SI = L/M = 0.4 mm ≈ 8.5·λ_D (λ_D ≈ 47 μm at n=5e17, T_e=14 eV) — adequate for hybrid PIC.
 # - N1 = 50 initial macroparticles per cell (5000 total): ionization grows the count by 10-50×
 #   over one transit time, so additional initial seeding is wasted; moments are dominated by
 #   ionized particles after t ≈ 1 t_char.
-const M_GRID = 30
-const N1_MAC = 50
+const M_GRID = 100
+const N1_MAC = 100
 
 params, groups = PaperScales.sim_params_from_si_scales(
     scales_SI,
