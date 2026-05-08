@@ -869,8 +869,8 @@ function deposit_particles(
 end
 
 """
-    move_particles(particles, E_y0, E_y1, E_z0, E_z1, H_x0, H_x1, j0, j1,
-                   ν_m_grid0, ν_m_grid1, x_grid, x_half, τ, h, ε, mi, c_inv, H0_func, counters)
+    move_particles(particles, E_y, E_z, H_x, j, ν_m, x_grid, x_half, τ, h, ε, mi, c_inv,
+                   H_ext_at_nodes, counters; N_min = 1)
         -> thrust_step
 
 Advance every active macroparticle over `τ` using Boris-style midpoint predictor–corrector
@@ -880,16 +880,23 @@ for the ion characteristics (paper system (11), dimensionless):
     ∂v_z/∂t = ε (E_z - (H_*/c) v_y),
     ∂z/∂t   = v_z.
 
-Per-particle subcycling: `N0 = max(1, ceil(τ |v| / (0.25 h)))` so each substep moves
-at most 0.25 cell widths. Fields are **time-linearly interpolated** between the old (`*0`)
-and new (`*1`) snapshots — currently the driver passes the same arrays for both, which
-makes the push effectively single-layer.
+Per-particle subcycling reproduces paper Eq. (38) (p. 38):
+
+    N₀ = max(N_*, ⌈τ · |v_z| / h⌉),   τ₀ = τ / N₀,
+
+where `N_*` is the minimum number of substeps per `τ` (kwarg `N_min`, default 1) — the
+"minimum number of nodes per τ" mentioned in the paper. Note that the criterion uses
+`|v_z|` (axial component only), since the substep cap is on axial displacement.
+
+Fields are evaluated at the (single) input level: the driver advances `(E, H, j, ν_m)` once
+per macro step, then performs the Faraday update post-push (paper §4 case II).
 
 Boundary handling:
 - Right exit (`z ≥ L`): particle deactivated, `thrust_step += m_i q max(v_z, 0)`,
   `counters.exited_right += 1` (∑ over the step gives the streamwise momentum flux out).
-- Left wall (`z ≤ 0`): absorbed (`counters.reflected_left += 1`); reinjection happens
-  through the neutral source.
+- Left wall (`z ≤ 0`): per the paper (p. 38) the particle is reflected (`v_z → -v_z`,
+  `v_y` unchanged) and the trace continues; we keep that behaviour inside the substep loop
+  and additionally compact the rare residual `z ≤ 0` end-of-step case as inactive.
 - NaN velocities: particle deactivated, `counters.nan += 1`.
 
 Returns `thrust_step` (raw axial momentum carried out at the right boundary).
@@ -909,7 +916,8 @@ function move_particles(
     mi::Float64,
     c_inv::Float64,
     H_ext_at_nodes::AbstractVector{Float64},
-    counters::Counters,
+    counters::Counters;
+    N_min::Int = 1,
 )
     thrust_step = 0.0
     L = x_grid[end]
@@ -921,13 +929,14 @@ function move_particles(
     @assert length(ν_m) == M + 1
     @assert length(H_x) == M
     nh = length(x_half)
+    N_min_eff = max(1, N_min)
     for p in particles
         p.active || continue
         z = p.z
         vy = p.vy
         vz = p.vz
-        v_abs = sqrt(vy^2 + vz^2)
-        N0 = max(1, ceil(Int, τ * v_abs / (0.25 * h)))
+        # Paper (38), p. 38: N₀ = max(N_*, ⌈τ |v_z| / h⌉) — axial-displacement cap only.
+        N0 = max(N_min_eff, ceil(Int, τ * abs(vz) / h))
         τ0 = τ / N0
         for _ in 1:N0
             if z < x_grid[1]
@@ -1019,25 +1028,27 @@ function move_particles(
     mi::Float64,
     c_inv::Float64,
     H0_func::Function,
-    counters::Counters,
+    counters::Counters;
+    N_min::Int = 1,
 )
     if E_y0 === E_y1 && E_z0 === E_z1 && H_x0 === H_x1 &&
        j0 === j1 && ν_m0_grid0 === ν_m0_grid1
         H_ext_at_nodes = [H0_func(z) for z in x_grid]
         return move_particles(
             particles, E_y0, E_z0, H_x0, j0, ν_m0_grid0, x_grid, x_half,
-            τ, h, ε, mi, c_inv, H_ext_at_nodes, counters,
+            τ, h, ε, mi, c_inv, H_ext_at_nodes, counters; N_min = N_min,
         )
     end
     thrust_step = 0.0
     L = x_grid[end]
+    N_min_eff = max(1, N_min)
     for p in particles
         p.active || continue
         z = p.z
         vy = p.vy
         vz = p.vz
-        v_abs = sqrt(vy^2 + vz^2)
-        N0 = max(1, ceil(Int, τ * v_abs / (0.25 * h)))
+        # Paper (38), p. 38: N₀ = max(N_*, ⌈τ |v_z| / h⌉).
+        N0 = max(N_min_eff, ceil(Int, τ * abs(vz) / h))
         τ0 = τ / N0
         for i in 1:N0
             if z < x_grid[1]

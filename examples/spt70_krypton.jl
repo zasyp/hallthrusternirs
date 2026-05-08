@@ -6,16 +6,16 @@ const M_KR_KG = 1.39e-25
 const M_XE_KG = 2.18e-25
 const M_E_KG  = 9.1093837015e-31
 
-const L_M   = 0.010
-const B_MAX = 300.0e-4
-const N_M3  = 5.0e17
+const L_M   = 0.04
+const B_MAX = 200.0e-4
+const N_M3  = 3.0e17
 const T_E_EV = 14.0
-const BETA0_M3S = 8.0e-13
-const T_ION_EV = 500.0 / 11600.0
+const BETA0_M3S = 8.0e-14
+const T_ION_EV = 14.0
 
-const H0_Z0    = 0.8
-const H0_SIGMA = 0.30
-const H0_OFFSET = 0.2
+const H0_Z0    = 0.9
+const H0_SIGMA = 0.20
+const H0_OFFSET = 0.3
 
 scales_SI = PaperScales.alfven_reference_scales(;
     L_m    = L_M,
@@ -50,7 +50,7 @@ const E0_DIMLESS = PaperScales.E0_dimless_from_discharge_voltage(
 v_pic0_dimless = PaperScales.v_pic0_dimless_from_ion_thermal(scales_SI, T_ION_EV)
 
 const ALPHA_B_ANOM = 0.0
-const N_A_LEFT_DIMLESS = 50.0
+const N_A_LEFT_DIMLESS = 0.0
 
 # Grid / PIC sizing for SPT-70 / Krypton at the SI scales above.
 # - h_SI = L/M = 0.4 mm ≈ 8.5·λ_D (λ_D ≈ 47 μm at n=5e17, T_e=14 eV) — adequate for hybrid PIC.
@@ -66,9 +66,9 @@ params, groups = PaperScales.sim_params_from_si_scales(
     M = M_GRID,
     N1 = N1_MAC,
     H0_func = H0_func,
-    v_a_dimless = 0.01,
+    v_a_dimless = 0.001,
     n_a_left    = N_A_LEFT_DIMLESS,
-    kR          = 0.01,
+    kR          = 0.001,
     v_pic0      = v_pic0_dimless,
     collision_model = :spitzer,
     alpha_B         = ALPHA_B_ANOM,
@@ -97,7 +97,7 @@ println(
 # - Ion transit time at U_discharge=250 V: t_transit ≈ L / sqrt(2eU/m_i) ≈ 1.7 μs ≈ 4.2 t_char.
 # - Steady state typically reached after 5-8 transit times → T_END ≈ 30 is sufficient and ~3× cheaper
 #   than T_END = 100 (no further physics is captured beyond the steady state).
-const T_END  = 50.0
+const T_END  = 100.0
 const FIGDIR = joinpath(ROOT, "output", "figures", "spt70_krypton")
 
 CoreSolver.run_simulation(
@@ -112,10 +112,9 @@ CoreSolver.run_simulation(
     si_plot_scales = scales_SI,
     plot_profiles_dimensionless = true,
     E0_dimless = E0_DIMLESS,
-    # Adaptive timestep: keep the four physical CFLs; relax the explicit Hall-whistler safety to 2.0
-    # because the elliptic Ohm solve already treats the Hall part of the current semi-implicitly.
-    tau_constraints = :full,
-    tau_hall_safety = 10.0,
+    # Adaptive timestep follows paper §3 (p. 41, step 4) verbatim:
+    #   τ ≤ h/v_a, τ ≤ h/max|v_z⁰|.
+    tau_constraints = :paper,
     log_tau_constraint = true,
 )
 

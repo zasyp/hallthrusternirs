@@ -450,6 +450,11 @@ Members:
                     `v_H = α0 · |H_*| / (n · c)`     (Hall-whistler CFL for the explicit
                     part of `compute_current = ∂_z H`).
 
+Paper §3 (p. 41, step 4) prescribes only the two Courant CFLs `:neutral_cfl` and `:ion_cfl`
+(no safety factors, no Hall / collision constraint); these form the `:paper` preset, which
+is the new default. The Hall/collision options remain available for experiments that need
+to clamp τ further.
+
 Electron-cyclotron CFL is intentionally absent: in the hybrid model electrons enter only via the
 elliptic Ohm solve for `E_y`, they are not advanced by an explicit equation of motion, so a
 `1/ω_ce` constraint would clamp `τ` for non-physical reasons.
@@ -460,18 +465,19 @@ const _TAU_NAMES = (:neutral_cfl, :ion_cfl, :collision, :hall)
     _resolve_tau_constraints(spec) -> Tuple{Vararg{Symbol}}
 
 Internal helper that normalises the `tau_constraints` argument of `run_simulation`:
-- a single `Symbol` such as `:full`, `:none`, `:fluid_only` or one of `_TAU_NAMES`,
+- a single `Symbol` such as `:paper`, `:full`, `:none`, `:fluid_only` or one of `_TAU_NAMES`,
 - or a `Tuple`/`Vector` of `Symbol` entries from `_TAU_NAMES` (duplicates are removed).
 
 Throws `ArgumentError` for unknown presets or unrecognised constraint names.
 """
 function _resolve_tau_constraints(spec)
     if spec isa Symbol
+        spec === :paper         && return (:neutral_cfl, :ion_cfl)
         spec === :full          && return _TAU_NAMES
         spec === :none          && return ()
         spec === :fluid_only    && return (:neutral_cfl, :ion_cfl, :collision)
         spec in _TAU_NAMES      && return (spec,)
-        throw(ArgumentError("Unknown tau_constraints preset :$spec; expected :full, :none, :fluid_only, " *
+        throw(ArgumentError("Unknown tau_constraints preset :$spec; expected :paper, :full, :none, :fluid_only, " *
             "any of $_TAU_NAMES, or a Tuple/Vector of those names."))
     elseif spec isa Tuple || spec isa AbstractVector
         out = Symbol[]
@@ -515,15 +521,18 @@ Steklov PIC smoothing: default half-window 20 on deposited moments only — **no
 # Adaptive timestep
 
 `τ = min(active_constraints..., total_time - t)`. Active set is selected by `tau_constraints`
-(a preset Symbol or an explicit collection of `_TAU_NAMES`). Per-constraint safety factors:
+(a preset Symbol or an explicit collection of `_TAU_NAMES`). Per-constraint safety factors
+default to 1.0 — the paper §3 (p. 41, step 4) formula `τ ≤ h/v_a, τ ≤ h/max|v_z⁰|` is
+recovered exactly with the default `:paper` preset:
 
 - `:neutral_cfl` — `tau_neutral_safety · h / v_a`     (default 1.0).
-- `:ion_cfl`     — `tau_ion_safety · h / max|v_iz|`   (default 0.2).
-- `:collision`   — `tau_collision_safety / max(ν_m)`  (default 0.5).
-- `:hall`        — `tau_hall_safety · h / v_H` with `v_H = α0 |H_*|/(n c)` (default 1.0).
+- `:ion_cfl`     — `tau_ion_safety · h / max|v_iz|`   (default 1.0).
+- `:collision`   — `tau_collision_safety / max(ν_m)`  (default 1.0; off in `:paper`).
+- `:hall`        — `tau_hall_safety · h / v_H` with `v_H = α0 |H_*|/(n c)` (default 1.0; off in `:paper`).
 
 Presets:
-- `:full` (default) — all four.
+- `:paper` (default) — `(:neutral_cfl, :ion_cfl)` exactly as in p. 41, step 4.
+- `:full`         — all four (legacy default; adds Hall + collision clamps).
 - `:fluid_only`   — `(:neutral_cfl, :ion_cfl, :collision)` (drop Hall, useful when Hall dominates τ).
 - `:none`         — only `total_time - t` (debug).
 - A single member of `_TAU_NAMES`, or a `Tuple`/`Vector` of names — explicit set.
@@ -549,13 +558,14 @@ function run_simulation(
     steklov_field_boundary::Symbol = :reflect,
     accumulate_induced_H::Union{Nothing, Bool} = nothing,
     induced_H_damping::Float64 = 0.0,
-    tau_constraints::Union{Symbol, Tuple, AbstractVector} = :full,
-    tau_neutral_safety::Float64 = 1.0,
-    tau_ion_safety::Float64 = 0.2,
-    tau_collision_safety::Float64 = 0.5,
-    tau_hall_safety::Float64 = 1.0,
+    tau_constraints::Union{Symbol, Tuple, AbstractVector} = :paper,
+    tau_neutral_safety::Float64 = 0.05,
+    tau_ion_safety::Float64 = 0.05,
+    tau_collision_safety::Float64 = 0.05,
+    tau_hall_safety::Float64 = 0.05,
     tau_min_floor::Float64 = 1e-14,
     log_tau_constraint::Bool = true,
+    pic_min_substeps::Int = 1,
 )
     mode in (:case1, :case2) || throw(ArgumentError("mode must be :case1 or :case2 (got $mode)"))
     steklov_field_boundary in (:reflect, :clamped) ||
@@ -751,11 +761,11 @@ function run_simulation(
         end
         for name in active_tau_constraints
             if name === :neutral_cfl
-                _consider!(:neutral_cfl, tau_neutral_safety * h / max(v_a, 1e-12))
+                _consider!(:neutral_cfl, tau_neutral_safety * h / max(v_a, 1e-30))
             elseif name === :ion_cfl
-                _consider!(:ion_cfl, tau_ion_safety * h / max(max_vz, 1e-12))
+                _consider!(:ion_cfl, tau_ion_safety * h / max(max_vz, 1e-30))
             elseif name === :collision
-                _consider!(:collision, tau_collision_safety / max(ν_max, 1e-8))
+                _consider!(:collision, tau_collision_safety / max(ν_max, 1e-30))
             elseif name === :hall
                 _consider!(:hall, tau_hall_safety * h / max(hall_v_max, 1e-30))
             end
@@ -817,7 +827,7 @@ function run_simulation(
             ν_m0, T_e, params.collision_model, H_total_work,
             params.alpha_B, params.ε, params.me, ξ_sq,
         )
-        thrust_step = move_particles(particles, E_y, E_z, H_x_half, j, ν_m_work, x_grid, x_half, τ, h, ε, mi, c_inv, H_ext_buf, counters)
+        thrust_step = move_particles(particles, E_y, E_z, H_x_half, j, ν_m_work, x_grid, x_half, τ, h, ε, mi, c_inv, H_ext_buf, counters; N_min = pic_min_substeps)
         if mode === :case2
             if acc_ind
                 @inbounds for i in 1:M
