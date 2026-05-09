@@ -8,10 +8,10 @@ const M_E_KG  = 9.1093837015e-31
 
 const L_M   = 0.04
 const B_MAX = 200.0e-4
-const N_M3  = 3.0e17
+const N_M3  = 4.0e17
 const T_E_EV = 14.0
 const BETA0_M3S = 8.0e-14
-const T_ION_EV = 14.0
+const T_ION_EV = 500.0/11600.0
 
 const H0_Z0    = 0.9
 const H0_SIGMA = 0.20
@@ -50,7 +50,7 @@ const E0_DIMLESS = PaperScales.E0_dimless_from_discharge_voltage(
 v_pic0_dimless = PaperScales.v_pic0_dimless_from_ion_thermal(scales_SI, T_ION_EV)
 
 const ALPHA_B_ANOM = 0.0
-const N_A_LEFT_DIMLESS = 0.0
+const N_A_LEFT_DIMLESS = 100.0
 
 # Grid / PIC sizing for SPT-70 / Krypton at the SI scales above.
 # - h_SI = L/M = 0.4 mm ≈ 8.5·λ_D (λ_D ≈ 47 μm at n=5e17, T_e=14 eV) — adequate for hybrid PIC.
@@ -66,7 +66,7 @@ params, groups = PaperScales.sim_params_from_si_scales(
     M = M_GRID,
     N1 = N1_MAC,
     H0_func = H0_func,
-    v_a_dimless = 0.001,
+    v_a_dimless = 0.05,
     n_a_left    = N_A_LEFT_DIMLESS,
     kR          = 0.001,
     v_pic0      = v_pic0_dimless,
