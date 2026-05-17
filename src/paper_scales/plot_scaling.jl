@@ -28,7 +28,7 @@ Thrust scale `F₀ = m_i · n · A · v_ref²` [N]. Used to convert the dimensio
 momentum-flux diagnostic emitted by `move_particles` into Newtons.
 """
 function thrust_momentum_SI(s::CharacteristicScalesSI, effective_area_m2::Float64 = THRUSTER_EFFECTIVE_AREA_M2)
-    return s.m_i_kg * s.n_m3 * effective_area_m2 * s.v_ref_m_s^2
+    return s.m_i_kg * s.n_m3 * effective_area_m2 * (s.v_ref_m_s)^2
 end
 
 """
