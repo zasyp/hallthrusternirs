@@ -257,7 +257,8 @@ function intermediate_temperature(
     me::Float64,
     ν_m0::Float64,
     kI::Float64,
-    h::Float64;
+    h::Float64,
+    ζ::Float64;
     n_reg_min::Union{Nothing, AbstractVector{Float64}} = nothing,
     T_cap::Float64 = 1e3,
     collision_model::Symbol = :spitzer,
@@ -275,7 +276,7 @@ function intermediate_temperature(
         vz_im1 = i == 2 ? (2 * vz[1] - vz[2]) : vz[i - 1]
         vz_ip1 = i == M ? (2 * vz[M + 1] - vz[M]) : vz[i + 1]
         dvz = (vz_ip1 - vz_im1) / (2h)
-        Q_collision = (γ - 1) * (mi / mΣ) * ν_m * j[i]^2 / n_loc
+        Q_collision = (γ - 1) * (mi / mΣ) * (ν_m/ζ) * j[i]^2 / n_loc
         Q_ionisation = (γ - 1) * kI * T_loc * n_a[i]
         T_new[i] = T_old[i] + τ * (Q_collision + Q_ionisation - (γ - 1) * T_loc * dvz)
         if !isfinite(T_new[i])

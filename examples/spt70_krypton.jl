@@ -12,11 +12,11 @@ const N_M3  = 5.0e17
 const T_E_EV = 14.0
 const T_ION_EV = 14.0
 const U_DISCHARGE_V = 75.0
-const BETA0_M3S = 8.0e-14
+const BETA0_M3S = 9.0e-14
 
-const H0_Z0    = 0.7
-const H0_SIGMA = 0.30
-const H0_OFFSET = 0.2
+const H0_Z0    = 0.6
+const H0_SIGMA = 0.40
+const H0_OFFSET = 0.1
 
 v_ion_ms = sqrt(2 * PaperScales.e_C * U_DISCHARGE_V / M_KR_KG)  
 scales_SI = PaperScales.CharacteristicScalesSI(;
@@ -50,11 +50,11 @@ const E0_DIMLESS = PaperScales.E0_dimless_from_discharge_voltage(
 
 v_pic0_dimless = PaperScales.v_pic0_dimless_from_ion_thermal(scales_SI, T_ION_EV)
 
-const ALPHA_B_ANOM = 0.0
+const ALPHA_B_ANOM = 1/16
 const N_A_LEFT_DIMLESS = 66.0
 
-const M_GRID = 150
-const N1_MAC = 100
+const M_GRID = 50
+const N1_MAC = 50
 
 params, groups = PaperScales.sim_params_from_si_scales(
     scales_SI,
@@ -62,9 +62,9 @@ params, groups = PaperScales.sim_params_from_si_scales(
     M = M_GRID,
     N1 = N1_MAC,
     H0_func = H0_func,
-    v_a_dimless = 250.0 / scales_SI.v_ref_m_s,
+    v_a_dimless = 240.0/scales_SI.v_ref_m_s,
     n_a_left    = N_A_LEFT_DIMLESS,
-    kR          = 0.01,
+    kR          = 0.00,
     v_pic0      = v_pic0_dimless,
     collision_model = :spitzer,
     alpha_B         = ALPHA_B_ANOM,
@@ -88,7 +88,7 @@ println(
     "$(round(v_ion_ms, digits=5)) m/s — compare to `v_iz` profile (sheath / partial Δφ not resolved).",
 )
 
-const T_END  = 300.0
+const T_END  = 70.0
 const FIGDIR = joinpath(ROOT, "output", "figures", "spt70_krypton")
 
 CoreSolver.run_simulation(

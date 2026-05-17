@@ -588,10 +588,10 @@ function run_simulation(
         end
         compute_current(j, H_x_half, h)
         kI_eff = kI
-        intermediate_temperature(T_tilde_buf, T_e, n_ion, v_iz, j, n_a_old, τ, γ, mi, me, ν_m0, kI_eff, h;
-            n_reg_min = n_reg_min, T_cap = T_cap,
-            collision_model = params.collision_model,
-            alpha_B = params.alpha_B, ε = params.ε, H_total = H_total_work)
+        intermediate_temperature(T_tilde_buf, T_e, n_ion, v_iz, j, n_a_old, τ, γ, mi, me, ν_m0, kI_eff, h, params.ζ;
+        n_reg_min = n_reg_min, T_cap = T_cap,
+        collision_model = params.collision_model,
+        alpha_B = params.alpha_B, ε = params.ε, H_total = H_total_work)
         T_e .= T_tilde_buf
         for p in particles
             p.active || continue
