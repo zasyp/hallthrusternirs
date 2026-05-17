@@ -9,10 +9,10 @@ const L_M   = 0.010
 const B_MAX = 200.0e-4
 
 const N_M3  = 5.0e17
-const T_E_EV = 14.0
+const T_E_EV = 15.0
 const T_ION_EV = 14.0
 const U_DISCHARGE_V = 75.0
-const BETA0_M3S = 9.0e-14
+const BETA0_M3S = 7.0e-14
 
 const H0_Z0    = 0.6
 const H0_SIGMA = 0.40
@@ -29,16 +29,6 @@ scales_SI = PaperScales.CharacteristicScalesSI(;
     m_e_kg = M_E_KG,
 )
 k_I_from_beta = PaperScales.k_I_from_beta0_si(BETA0_M3S, scales_SI)
-# scales_Xe = PaperScales.alfven_reference_scales(;
-#     L_m    = L_M,
-#     B_T    = B_MAX,
-#     n_m3   = N_M3,
-#     T_e_eV = T_E_EV,
-#     m_i_kg = M_XE_KG,
-#     m_e_kg = M_E_KG,
-# )
-
-# groups_Xe = PaperScales.paper_dimensionless_from_si(scales_Xe, BETA0_M3S)
 
 H0_func = z -> H0_OFFSET + MagneticField.gaussian_Br(z, 1.0, H0_Z0, H0_SIGMA)
 
@@ -88,7 +78,7 @@ println(
     "$(round(v_ion_ms, digits=5)) m/s — compare to `v_iz` profile (sheath / partial Δφ not resolved).",
 )
 
-const T_END  = 70.0
+const T_END  = 100.0
 const FIGDIR = joinpath(ROOT, "output", "figures", "spt70_krypton")
 
 CoreSolver.run_simulation(
@@ -102,8 +92,8 @@ CoreSolver.run_simulation(
     si_plot_scales = scales_SI,
     plot_profiles_dimensionless = true,
     E0_dimless = E0_DIMLESS,
-    steklov_field_half_width = 20,
-    steklov_field_passes = 5,
+    steklov_field_half_width = 6,
+    steklov_field_passes = 2,
     steklov_field_boundary = :reflect,
 )
 
