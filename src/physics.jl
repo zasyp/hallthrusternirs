@@ -374,22 +374,22 @@ function electric_field_solver(
         vz_im1 = i == 2 ? (2 * vz[1] - vz[2]) : vz[i - 1]
         vz_ip1 = i == M ? (2 * vz[M + 1] - vz[M]) : vz[i + 1]
         dvz = (vz_ip1 - vz_im1) / (2h)
-        C = vz[i] * τ * c_inv / (4h)
+        C = vz[i] * τ  / (4h)
         D = (α * τ / (2 * n_loc * h^2)) * dvz
         a[i] = -A - (B + D) - C
         b[i] = 1.0 + 2A + 2(B + D)
         c[i] = -A - (B + D) + C
         dj = (j_old[i + 1] - j_old[i - 1]) / (2h)
-        d[i] = ν_m * j_old[i] - H_star[i] * vz[i] * c_inv +
+        d[i] = ν_m * j_old[i] - H_star[i] * vz[i]  +
             (α / n_loc) * j_old[i] * dvz + (α / n_loc) * vz[i] * dj
     end
     if bc_type == :j0
         n1 = n[1] + (n_reg_min === nothing ? N_FLOOR : max(n_reg_min[1], N_FLOOR))
         nM = n[M + 1] + (n_reg_min === nothing ? N_FLOOR : max(n_reg_min[M + 1], N_FLOOR))
         dj_left = j_old[2] / h
-        E_y[1] = (-H_star[1] + (α / n1) * dj_left) * vz[1] * c_inv
+        E_y[1] = (-H_star[1] + (α / n1) * dj_left) * vz[1] 
         dj_right = -j_old[M] / h
-        E_y[M + 1] = (-H_star[M + 1] + (α / nM) * dj_right) * vz[M + 1] * c_inv
+        E_y[M + 1] = (-H_star[M + 1] + (α / nM) * dj_right) * vz[M + 1] 
         if M - 1 > 0
             d[2] -= a[2] * E_y[1]
             a[2] = 0.0
@@ -478,7 +478,7 @@ function compute_Ez(
     term4_arr = zeros(M + 1)
     for i in 1:(M + 1)
         n_a_mid = 0.5 * (n_a_new[i] + n_a_old[i])
-        term1_arr[i] = H_star[i] * vy_sm[i] * c_inv
+        term1_arr[i] = H_star[i] * vy_sm[i] 
         term2_arr[i] = β_Ez_coef * kI * n_a_mid * va
         term3_arr[i] = (α0 / n_safe[i]) * H_star[i] * j_mid_sm[i]
         term4_arr[i] = (ζ * α0 / n_safe[i]) * d_nT[i]
@@ -619,10 +619,10 @@ function move_particles(
             # Ion characteristics (system 11): ∂v_y/∂t = ε(E_y + H_* v_z/c − j·ν_m),
             #                                  ∂v_z/∂t = ε(E_z − H_* v_y/c).
             j_over_σ = j_mid * ν_m_mid
-            vy_pred = vy + 0.5 * τ0 * ε * (E_y_mid + H_star_mid * vz * c_inv - j_over_σ)
-            vz_pred = vz + 0.5 * τ0 * ε * (E_z_mid - H_star_mid * vy * c_inv)
-            vy_new = vy + τ0 * ε * (E_y_mid + H_star_mid * vz_pred * c_inv - j_mid * ν_m_mid)
-            vz_new = vz + τ0 * ε * (E_z_mid - H_star_mid * vy_pred * c_inv)
+            vy_pred = vy + 0.5 * τ0 * ε * (E_y_mid + H_star_mid * vz  - j_over_σ)
+            vz_pred = vz + 0.5 * τ0 * ε * (E_z_mid - H_star_mid * vy )
+            vy_new = vy + τ0 * ε * (E_y_mid + H_star_mid * vz_pred  - j_mid * ν_m_mid)
+            vz_new = vz + τ0 * ε * (E_z_mid - H_star_mid * vy_pred )
             if !isfinite(vy_new) || !isfinite(vz_new)
                 counters.nan += 1
                 p.active = false

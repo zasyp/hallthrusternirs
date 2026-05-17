@@ -16,7 +16,7 @@ function sim_params_from_si_scales(
     kR::Float64 = 0.05,
     γ::Float64 = 5 / 3,
     ε_dim::Float64 = 1.0,
-    c_inv::Float64 = 2.15e-4,
+    c_inv::Float64 = 1.0,
     T_ion::Float64 = 1.0,
     ν_e_total_hz::Union{Nothing, Float64} = nothing,
     v_pic0::Float64 = 1.0,

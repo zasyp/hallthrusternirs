@@ -477,7 +477,7 @@ function run_simulation(
     α = params.α
     α0 = params.α0
     ζ = params.ζ
-    c_inv = params.c_inv
+    c_inv = 1.0
     H0_func = params.H0_func
     N1 = params.N1
     x_grid = range(0, L, length = M + 1)
@@ -586,6 +586,7 @@ function run_simulation(
             τ = min(1e-8, 0.01 * h / max(max_vz, 1e3), h / max(v_a, 1e-12), total_time - t)
             @warn "Time step τ extremely small; using $τ (avoided 1e-4 clamp)"
         end
+
         compute_current(j, H_x_half, h)
         kI_eff = kI
         intermediate_temperature(T_tilde_buf, T_e, n_ion, v_iz, j, n_a_old, τ, γ, mi, me, ν_m0, kI_eff, h, params.ζ;
