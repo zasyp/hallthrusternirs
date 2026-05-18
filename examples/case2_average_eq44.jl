@@ -1,5 +1,3 @@
-# Same Case (II) as `case2_full_emhd.jl`, but modified field smoothing per (44):
-# truncated window on {0,L} as in figures 10–11. Same grid and similarity params (p.44).
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
 include(joinpath(ROOT, "src", "HallThrusterNIRS.jl"))
@@ -38,13 +36,13 @@ params = PartCount.SimParams(;
     ε = ε_paper,
     ν_m0 = 15.0,
     α = α_paper,
-    α0 = α0_paper,
+    α0 = 10.0,
     ζ = ζ_paper,
     ε_dim = 1.0,
     λ_e_λΣ = λ_e_λΣ,
     c_inv = 1.0,
     H0_func = z -> MagneticField.gaussian_Br(z, H0_B_max, H0_z0, H0_σ),
-    v_pic0 = 58.0,
+    v_pic0 = 2.0,
 )
 
 println("Case (II) — full EMHD, field averaging (44) clamped, ℓ=20:")

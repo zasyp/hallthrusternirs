@@ -257,7 +257,7 @@ function _profile_line_dim!(ax, gi::Int, s, scales, lbl, color)
     v_iy_dim = s.v_iy .* scales.v_ms
     j_si = s.j .* scales.j_am2
     n_si = s.n_i .* scales.n_m3
-    v_ey_dim = v_iy_dim .- j_si ./ (PaperScales.e_C .* n_si)
+    v_ey_dim = - j_si ./ (PaperScales.e_C .* n_si)
     if gi == 1
         lines!(ax, z, s.n_a .* scales.n_m3, color = color, label = lbl)
     elseif gi == 2
@@ -696,7 +696,7 @@ function run_simulation(
                 )
                 n_safe = max.(n_ion, eps())
                 # v_ey: cf. `vey_j_over_en`; match j_y [A/m^2] & quasineutrality j = e n (v_iy−v_ey).
-                v_ey = v_iy .- vey_j_over_en .* j ./ n_safe
+                v_ey = - vey_j_over_en .* j ./ n_safe
                 H_tot = H_tot_snap
                 snapshots[st] = (;
                     z = copy(x_grid),
