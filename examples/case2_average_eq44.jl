@@ -25,8 +25,8 @@ const α0_paper = κ_paper * ξ_paper * λ_i_λΣ * sqrt(λi_λe)
 
 params = PartCount.SimParams(;
     L = 1.0,
-    M = 100,
-    N1 = 100,
+    M = 50,
+    N1 = 50,
     mi = 1.0,
     me = ME_OVER_MI,
     T_ion = 1.0,
@@ -57,7 +57,7 @@ CoreSolver.run_simulation(
     params;
     mode = :case2,
     total_time = T_END,
-    save_times = [10.0, 20.0, 30.0, 40.0, 50.0],
+    save_times = [40.0, 45.0, 50.0],
     do_plot = true,
     plot_output_dir = FIGDIR,
     plot_profiles_dimensionless = true,

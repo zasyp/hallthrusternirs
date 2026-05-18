@@ -302,10 +302,11 @@ and Eq. (38) for `E_z`, but is **not** added again to `j` from `compute_current`
 function compute_current(j::Vector{Float64}, H_x::Vector{Float64}, h::Float64)
     M = length(H_x)
     @assert length(j) == M + 1
+    j[1] = 0.0
+    j[end] = 0.0
     for i in 2:M
         j[i] = (H_x[i] - H_x[i - 1]) / h
     end
-    j[1] = j[M + 1] = 0.0
     return j
 end
 
