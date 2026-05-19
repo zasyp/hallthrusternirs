@@ -9,9 +9,9 @@ const L_M   = 0.01
 const B_MAX = 200.0e-4
 
 const N_M3  = 5.0e17
-const T_E_EV = 5.0
+const T_E_EV = 3.0
 const T_ION_EV = 14.0
-const U_DISCHARGE_V = 60.0
+const U_DISCHARGE_V = 65.0
 const BETA0_M3S = 8.0e-14
 
 const H0_Z0    = 0.7
@@ -41,10 +41,10 @@ const E0_DIMLESS = PaperScales.E0_dimless_from_discharge_voltage(
 v_pic0_dimless = PaperScales.v_pic0_dimless_from_ion_thermal(scales_SI, T_ION_EV)
 println(v_pic0_dimless)
 const ALPHA_B_ANOM = 0.002
-const N_A_LEFT_DIMLESS = 30.0
+const N_A_LEFT_DIMLESS = 60.0
 
-const M_GRID = 30
-const N1_MAC = 30
+const M_GRID = 100
+const N1_MAC = 100
 
 params, groups = PaperScales.sim_params_from_si_scales(
     scales_SI,
@@ -52,10 +52,10 @@ params, groups = PaperScales.sim_params_from_si_scales(
     M = M_GRID,
     N1 = N1_MAC,
     H0_func = H0_func,
-    v_a_dimless = 0.1,
+    v_a_dimless = 2000/v_ion_ms,
     n_a_left    = N_A_LEFT_DIMLESS,
     kR          = 0.01,
-    v_pic0      = v_pic0_dimless*10,
+    v_pic0      = v_pic0_dimless,
     collision_model = :spitzer,
     alpha_B         = ALPHA_B_ANOM,
     c_inv = 1.0,          
@@ -79,13 +79,13 @@ println(
     "$(round(v_ion_ms, digits=5)) m/s — compare to `v_iz` profile (sheath / partial Δφ not resolved).",
 )
 
-const T_END  = 30.0
+const T_END  = 90.0
 const FIGDIR = joinpath(ROOT, "output", "figures", "spt70_krypton")
 
 CoreSolver.run_simulation(
     params;
     mode = :case2,
-    accumulate_induced_H = false,
+    accumulate_induced_H = true,
     total_time = T_END,
     save_times = [T_END*0.9, T_END*0.95, T_END],
     do_plot = true,
