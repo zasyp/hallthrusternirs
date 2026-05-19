@@ -5,7 +5,7 @@ const k_B_JK = 1.380649e-23
 const μ0_SI = 4π * 1e-7
 
 """Thruster channel effective cross-section area [m^2]; momentum thrust scaling for plots."""
-const THRUSTER_EFFECTIVE_AREA_M2 = 0.0025
+const THRUSTER_EFFECTIVE_AREA_M2 = 0.002
 
 # Gaussian-xi: e in statC, c in cm/s, rho in g/cm^3, L in cm.
 const e_stat = 4.80320425e-10
