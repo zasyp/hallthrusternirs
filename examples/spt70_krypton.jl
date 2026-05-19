@@ -5,23 +5,23 @@ using .HallThrusterNIRS
 const M_KR_KG = 1.39e-25
 const M_E_KG  = 9.1093837015e-31
 
-const L_M   = 0.01
-const B_MAX = 200.0e-4
+const L_M   = 0.02
+const B_MAX = 250.0e-4
 
 const N_M3  = 5.0e17
-const T_E_EV = 3.0
-const T_ION_EV = 14.0
-const U_DISCHARGE_V = 65.0
-const BETA0_M3S = 8.0e-14
+const T_E_EV = 15.0
+const T_ION_EV = 4.5
+const U_DISCHARGE_V = 150.0
+const BETA0_M3S = 7.2e-14
 
-const H0_Z0    = 0.7
-const H0_SIGMA = 0.30
+const H0_Z0    = 0.65
+const H0_SIGMA = 0.40
 const H0_OFFSET = 0.1
 
 v_ion_ms = sqrt(2 * 1.6e-19*U_DISCHARGE_V / M_KR_KG)
 scales_SI = PaperScales.CharacteristicScalesSI(;
     L_m    = L_M,
-    v_ref_m_s = v_ion_ms,
+    v_ref_m_s = 4500,
     B_T    = B_MAX,
     n_m3   = N_M3,
     T_K    = T_E_EV * PaperScales.e_C / PaperScales.k_B_JK,
@@ -41,7 +41,7 @@ const E0_DIMLESS = PaperScales.E0_dimless_from_discharge_voltage(
 v_pic0_dimless = PaperScales.v_pic0_dimless_from_ion_thermal(scales_SI, T_ION_EV)
 println(v_pic0_dimless)
 const ALPHA_B_ANOM = 0.002
-const N_A_LEFT_DIMLESS = 60.0
+const N_A_LEFT_DIMLESS = 66.0
 
 const M_GRID = 100
 const N1_MAC = 100
@@ -52,7 +52,7 @@ params, groups = PaperScales.sim_params_from_si_scales(
     M = M_GRID,
     N1 = N1_MAC,
     H0_func = H0_func,
-    v_a_dimless = 2000/v_ion_ms,
+    v_a_dimless = 800/v_ion_ms,
     n_a_left    = N_A_LEFT_DIMLESS,
     kR          = 0.01,
     v_pic0      = v_pic0_dimless,
@@ -79,7 +79,7 @@ println(
     "$(round(v_ion_ms, digits=5)) m/s — compare to `v_iz` profile (sheath / partial Δφ not resolved).",
 )
 
-const T_END  = 90.0
+const T_END  = 100.0
 const FIGDIR = joinpath(ROOT, "output", "figures", "spt70_krypton")
 
 CoreSolver.run_simulation(
@@ -87,7 +87,7 @@ CoreSolver.run_simulation(
     mode = :case2,
     accumulate_induced_H = true,
     total_time = T_END,
-    save_times = [T_END*0.9, T_END*0.95, T_END],
+    save_times = [T_END],
     do_plot = true,
     plot_output_dir = FIGDIR,
     si_plot_scales = scales_SI,

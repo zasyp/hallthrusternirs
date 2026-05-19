@@ -161,9 +161,9 @@ function plot_results(snapshots, diagnostics, save_times; output_dir::AbstractSt
                         _profile_line_dimless!(axes[k], gi, snap, lbl, c)
                     end
                 end
-                for ax in axes
-                    axislegend(ax, position = :rt, labelsize = 8)
-                end
+                # for ax in axes
+                #     axislegend(ax, position = :rt, labelsize = 8)
+                # end
                 save(joinpath(output_dir, @sprintf("profiles_all_fields_%02d.png", pageno)), fig)
             end
         end
@@ -303,8 +303,8 @@ function plot_results_dimensional(snapshots, diagnostics, save_times, scales::Di
     if !isempty(snapshots)
         times = sort(collect(keys(snapshots)))
         titles = [
-            "n_a [m^-3]", "n_i [m^-3]", "v_iy ions [m/s]", "v_ey [m/s] = v_iy − j_y/(e n_i)", "v_iz ions [m/s]", "T_e [eV]", "E_y [V/m]",
-            "E_z [V/m]", "j_y [A/m^2]", "H_x [T]", "H_x_half [T]", "H_ext [T]", "H_total [T]",
+            "Плотность нейтральных частиц [м^-3]", "Плотность ионов [м^-3]", "Азимутальная скорость ионов [м/с]", "v_ey [m/s]", "Продольная скорость ионов [м/с]", "Температура электронов [эВ]", "Азимутальное электрическое поле [В/м]",
+            "Продольное электрическое поле [В/м]", "Азимутальный ток [А/м^2]", "H_x [T]", "H_x_half [T]", "Внешнее магнитное поле [T]", "H_total [T]",
             "nu_m [1/s]", "E_z term1 [V/m]", "E_z term2 [V/m]", "E_z term3 [V/m]", "E_z term4 [V/m]",
         ]
         ntot = length(titles)
@@ -331,9 +331,9 @@ function plot_results_dimensional(snapshots, diagnostics, save_times, scales::Di
                         _profile_line_dim!(axes[k], gi, s, scales, lbl, c)
                     end
                 end
-                for ax in axes
-                    axislegend(ax, position = :rt, labelsize = 8)
-                end
+                # for ax in axes
+                #     axislegend(ax, position = :rt, labelsize = 8)
+                # end
                 save(joinpath(output_dir, @sprintf("profiles_all_fields_dimensional_%02d.png", pageno)), fig)
             end
         end
@@ -387,7 +387,7 @@ function plot_results_dimensional(snapshots, diagnostics, save_times, scales::Di
             )
             lines!(axs, t, thrust_N; color = (:dodgerblue, 0.25), linewidth = 0.8, label = "F_T (raw)")
             lines!(axs, t, thrust_smooth; color = :dodgerblue, linewidth = 1.6, label = "F_T (MA)")
-            axislegend(axs; position = :rt, labelsize = 8)
+            # axislegend(axs; position = :rt, labelsize = 8)
             save(joinpath(output_dir, "diagnostics_thrust_smoothed_dimensional.png"), figs)
         end
     end

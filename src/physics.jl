@@ -484,7 +484,7 @@ function compute_Ez(
         term3_arr[i] = (α0 / n_safe[i]) * H_star[i] * j_mid_sm[i]
         term4_arr[i] = (ζ * α0 / n_safe[i]) * d_nT[i]
     end
-    Ez .= term1_arr .- term2_arr .- term3_arr .- term4_arr
+    Ez .= term1_arr .- term2_arr .+ term3_arr .- term4_arr
     for i in 1:(M + 1)
         if !isfinite(Ez[i])
             Ez[i] = 0.0
