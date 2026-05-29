@@ -59,7 +59,7 @@ CoreSolver.run_simulation(
     do_plot = true,
     plot_output_dir = FIGDIR,
     plot_profiles_dimensionless = true,
-    steklov_field_half_width = 20,
+    steklov_field_half_width = 5,
     steklov_field_passes = 5,
     steklov_field_boundary = :clamped,
 )

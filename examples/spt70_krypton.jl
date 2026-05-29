@@ -5,14 +5,14 @@ using .HallThrusterNIRS
 const M_KR_KG = 1.39e-25
 const M_E_KG  = 9.1093837015e-31
 
-const L_M   = 0.02
+const L_M   = 0.03
 const B_MAX = 250.0e-4
 
 const N_M3  = 5.0e17
-const T_E_EV = 16.0
-const T_ION_EV = 4.5
-const U_DISCHARGE_V = 150.0
-const BETA0_M3S = 3.3e-14
+const T_E_EV = 14.0
+const T_ION_EV = 1.0
+const U_DISCHARGE_V = 240.0
+const BETA0_M3S = 2e-14
 
 const H0_Z0    = 0.75
 const H0_SIGMA = 0.20
@@ -43,8 +43,8 @@ println(v_pic0_dimless)
 const ALPHA_B_ANOM = 0.002
 const N_A_LEFT_DIMLESS = 66.0
 
-const M_GRID = 80
-const N1_MAC = 80
+const M_GRID = 30
+const N1_MAC = 30
 
 params, groups = PaperScales.sim_params_from_si_scales(
     scales_SI,
@@ -52,10 +52,10 @@ params, groups = PaperScales.sim_params_from_si_scales(
     M = M_GRID,
     N1 = N1_MAC,
     H0_func = H0_func,
-    v_a_dimless = 500/v_ion_ms,
+    v_a_dimless = 300/v_ion_ms,
     n_a_left    = N_A_LEFT_DIMLESS,
     kR          = 0.01,
-    v_pic0      = v_pic0_dimless,
+    v_pic0      = 0.1,
     collision_model = :spitzer,
     alpha_B         = ALPHA_B_ANOM,
     c_inv = 1.0,          
@@ -79,13 +79,13 @@ println(
     "$(round(v_ion_ms, digits=5)) m/s — compare to `v_iz` profile (sheath / partial Δφ not resolved).",
 )
 
-const T_END  = 400.0
+const T_END  = 30.0
 const FIGDIR = joinpath(ROOT, "output", "figures", "spt70_krypton")
 
 CoreSolver.run_simulation(
     params;
     mode = :case2,
-    accumulate_induced_H = true,
+    accumulate_induced_H = false,
     total_time = T_END,
     save_times = [T_END*0.8, T_END*0.9,T_END],
     do_plot = true,

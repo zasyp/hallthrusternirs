@@ -17,7 +17,7 @@ mutable struct Counters
     reflected_left::Int
 end
 
-struct SimParams
+mutable struct SimParams
     L::Float64
     M::Int
     h::Float64
@@ -273,8 +273,8 @@ function intermediate_temperature(
         n_loc = n[i] + (n_reg_min === nothing ? N_FLOOR : max(n_reg_min[i], N_FLOOR))
         H_loc = H_total === nothing ? 0.0 : H_star_channel_nonneg(H_total[i])
         ν_m = local_nu_m(ν_m0, T_loc, collision_model, H_loc, alpha_B, ε, me)
-        vz_im1 = i == 2 ? (2 * vz[1] - vz[2]) : vz[i - 1]
-        vz_ip1 = i == M ? (2 * vz[M + 1] - vz[M]) : vz[i + 1]
+        vz_im1 = i == 2 ? (3 * vz[1] - vz[2]) : vz[i - 1]
+        vz_ip1 = i == M ? (3 * vz[M + 1] - vz[M]) : vz[i + 1]
         dvz = (vz_ip1 - vz_im1) / (2h)
         Q_collision = (γ - 1) * (mi / mΣ) * (ν_m/ζ) * j[i]^2 / n_loc
         Q_ionisation = (γ - 1) * kI * T_loc * n_a[i]
@@ -452,7 +452,7 @@ function compute_Ez(
     for i in 2:M
         H_interpolation[i] = (H_x_mid[i] + H_x_mid[i - 1]) / 2
     end
-    H_interpolation[M + 1] = H_x_mid[M]
+    H_interpolation[M + 1] = H_x_mid[end]
     if H_ext_at_nodes === nothing
         H_star = H_star_channel_nonneg.(H_interpolation .+ H0_func.(x_grid))
     else
@@ -484,7 +484,7 @@ function compute_Ez(
         term3_arr[i] = (α0 / n_safe[i]) * H_star[i] * j_mid_sm[i]
         term4_arr[i] = (ζ * α0 / n_safe[i]) * d_nT[i]
     end
-    Ez .= term1_arr .- term2_arr .+ term3_arr .- term4_arr
+    Ez .= term1_arr .- term2_arr .- term3_arr .- term4_arr
     for i in 1:(M + 1)
         if !isfinite(Ez[i])
             Ez[i] = 0.0

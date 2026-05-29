@@ -2,7 +2,6 @@ module Visualization
 
 using CairoMakie
 using Printf
-
 export plot_results
 
 const _MAX_AXES_PER_FIG = 4
@@ -405,6 +404,7 @@ using ..Visualization
 using ..VisualizationDimensional
 using ..DiagnosticsMetrics
 using ..PaperScales
+using ..MagneticField
 
 export run_simulation
 
@@ -623,11 +623,19 @@ function run_simulation(
             _steklov_dispatch!(E_y, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
             _steklov_dispatch!(E_z, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
             _steklov_dispatch!(j, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
+            j[1] = 0
+            j = max.(j, 0.0)
+            j[end] = 0
+
+
             _steklov_dispatch!(E_z_term1, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
             _steklov_dispatch!(E_z_term2, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
             _steklov_dispatch!(E_z_term3, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
             _steklov_dispatch!(E_z_term4, steklov_field_half_width, steklov_field_passes, steklov_field_boundary)
-            E_z .+= E0_dimless
+
+            E_z .+= E0_dimless.* MagneticField.gaussian_Br.(x_grid, 1.0, 0.5, 0.3)
+            E_z[1] = 0
+            E_z[end] =0
         else
             fill!(E_y, 0.0)
             fill!(H_x_half, 0.0)

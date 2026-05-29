@@ -47,12 +47,12 @@ end
 
 """omega_ce = e|B|/m_e [rad/s]. Use floatmin(me), not eps(), since m_e << eps(Float64)."""
 function omega_ce_electron_rad_s(B_T::Float64, m_e_kg::Float64)
-    return abs(e_C * B_T / max(m_e_kg, floatmin(Float64)))
+    return abs(1.61e-19 * B_T / 9.11e-31)
 end
 
 """nu_e [Hz] from beta_e = omega_ce/nu_e (inverse of solver Hall diagnostic)."""
-function nu_e_hz_from_beta_e(B_T::Float64, m_e_kg::Float64, beta_e::Float64)
-    return omega_ce_electron_rad_s(B_T, m_e_kg) / max(beta_e, eps())
+function nu_e_hz_from_beta_e(B_T::Float64, m_e_kg::Float64)
+    return omega_ce_electron_rad_s(B_T, m_e_kg) / 2 * π* 500
 end
 
 """
